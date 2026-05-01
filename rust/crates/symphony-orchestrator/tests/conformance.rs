@@ -101,6 +101,7 @@ fn make_config(max_concurrent: usize, stall_ms: i64) -> Arc<ServiceConfig> {
             ..Default::default()
         },
         agent: AgentConfig {
+            backend: symphony_core::config::AgentBackend::Codex,
             max_concurrent_agents: max_concurrent,
             max_turns: 20,
             max_retry_backoff_ms: 300_000,

@@ -145,10 +145,10 @@ fn render_dashboard(view: &StateView) -> String {
     ));
     html.push_str(&format!(
         "<p>tokens in/out/total: {} / {} / {} &middot; runtime: {:.1}s</p>",
-        view.codex_totals.input_tokens,
-        view.codex_totals.output_tokens,
-        view.codex_totals.total_tokens,
-        view.codex_totals.seconds_running
+        view.agent_totals.input_tokens,
+        view.agent_totals.output_tokens,
+        view.agent_totals.total_tokens,
+        view.agent_totals.seconds_running
     ));
 
     html.push_str("<h2>running</h2>");

@@ -29,6 +29,13 @@ pub enum ConfigError {
     MissingTrackerProjectSlug,
     #[error("codex.command must not be empty")]
     EmptyCodexCommand,
+    /// SPEC v2: backend is in the spec set but this implementation does not
+    /// ship it.
+    #[error("agent.backend `{0}` is defined by SPEC v2 but not implemented in this build")]
+    UnimplementedAgentBackend(String),
+    /// SPEC v2: backend value is not in the spec set at all.
+    #[error("agent.backend `{0}` is not a SPEC v2 backend (expected one of `codex`, `claude_code`, `openai_compat`, `anthropic_messages`)")]
+    UnsupportedAgentBackend(String),
     #[error("workflow error: {0}")]
     Workflow(#[from] WorkflowError),
 }
