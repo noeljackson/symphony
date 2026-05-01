@@ -128,19 +128,41 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
+      # SPEC §5.3.5 v2: agent.backend selects the agent runner.
+      # This Elixir reference currently only ships the `codex` backend, but
+      # the field is parsed and validated so v2-compliant WORKFLOW.md files
+      # don't fail to load.
+      field(:backend, :string, default: "codex")
       field(:max_concurrent_agents, :integer, default: 10)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
       field(:max_concurrent_agents_by_state, :map, default: %{})
     end
 
+    # SPEC v2 §5.3.5 enumerates four backends. This Elixir reference currently
+    # only ships the `codex` backend; specifying any other value is rejected
+    # at parse time. The Rust reference is being built out against the full
+    # set.
+    @implemented_backends ~w(codex)
+    @spec_backends ~w(codex claude_code openai_compat anthropic_messages)
+
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(
         attrs,
-        [:max_concurrent_agents, :max_turns, :max_retry_backoff_ms, :max_concurrent_agents_by_state],
+        [
+          :backend,
+          :max_concurrent_agents,
+          :max_turns,
+          :max_retry_backoff_ms,
+          :max_concurrent_agents_by_state
+        ],
         empty_values: []
+      )
+      |> validate_inclusion(:backend, @implemented_backends,
+        message:
+          "this Elixir reference only implements `codex`; SPEC v2 also defines #{Enum.join(@spec_backends -- @implemented_backends, ", ")} but those backends are not built here"
       )
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
