@@ -66,6 +66,7 @@ fn cfg(workspace_root: PathBuf, command: String, before_run: Option<String>) -> 
             ..Default::default()
         },
         agent: AgentConfig {
+            backend: symphony_core::config::AgentBackend::Codex,
             max_concurrent_agents: 1,
             max_turns: 1,
             max_retry_backoff_ms: 300_000,

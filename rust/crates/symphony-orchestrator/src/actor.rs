@@ -36,7 +36,7 @@ pub enum OrchestratorCommand {
         issue_id: String,
         outcome: WorkerOutcome,
     },
-    CodexUpdate {
+    AgentUpdate {
         issue_id: String,
         event: Box<RuntimeEvent>,
     },
@@ -80,7 +80,7 @@ pub struct Snapshot {
     pub generated_at: OffsetDateTime,
     pub running: Vec<SnapshotRunningRow>,
     pub retrying: Vec<SnapshotRetryRow>,
-    pub codex_totals: crate::state::CodexTotals,
+    pub agent_totals: crate::state::CodexTotals,
 }
 
 /// Public handle the rest of the system uses to talk to the orchestrator.
@@ -214,8 +214,8 @@ impl Orchestrator {
             OrchestratorCommand::WorkerExit { issue_id, outcome } => {
                 self.handle_worker_exit(issue_id, outcome).await;
             }
-            OrchestratorCommand::CodexUpdate { issue_id, event } => {
-                self.apply_codex_update(&issue_id, *event);
+            OrchestratorCommand::AgentUpdate { issue_id, event } => {
+                self.apply_agent_update(&issue_id, *event);
             }
             OrchestratorCommand::RetryFire { issue_id } => {
                 self.handle_retry_fire(&issue_id).await;
@@ -299,7 +299,7 @@ impl Orchestrator {
                 .filter_map(|(id, entry)| {
                     let last = entry
                         .session
-                        .last_codex_timestamp_monotonic
+                        .last_agent_timestamp_monotonic
                         .unwrap_or(entry.started_monotonic);
                     if now_mono.duration_since(last) > stall {
                         Some(id.clone())
@@ -431,7 +431,7 @@ impl Orchestrator {
         let pump = tokio::spawn(async move {
             while let Some(event) = codex_rx.recv().await {
                 let _ = event_pump_tx
-                    .send(OrchestratorCommand::CodexUpdate {
+                    .send(OrchestratorCommand::AgentUpdate {
                         issue_id: id_for_event.clone(),
                         event: Box::new(event),
                     })
@@ -565,15 +565,15 @@ impl Orchestrator {
         }
     }
 
-    fn apply_codex_update(&mut self, issue_id: &str, event: RuntimeEvent) {
+    fn apply_agent_update(&mut self, issue_id: &str, event: RuntimeEvent) {
         let entry = match self.state.running.get_mut(issue_id) {
             Some(e) => e,
             None => return,
         };
-        entry.session.last_codex_event = Some(event.event.clone());
-        entry.session.last_codex_message = event.message.clone();
-        entry.session.last_codex_timestamp_monotonic = Some(Instant::now());
-        entry.session.last_codex_timestamp = Some(event.timestamp);
+        entry.session.last_agent_event = Some(event.event.clone());
+        entry.session.last_agent_message = event.message.clone();
+        entry.session.last_agent_timestamp_monotonic = Some(Instant::now());
+        entry.session.last_agent_timestamp = Some(event.timestamp);
         entry.session.session_id = event
             .session_id
             .clone()
@@ -594,25 +594,25 @@ impl Orchestrator {
             let total_delta = absolute
                 .total_tokens
                 .saturating_sub(entry.session.last_reported_total_tokens);
-            entry.session.codex_input_tokens = absolute.input_tokens;
-            entry.session.codex_output_tokens = absolute.output_tokens;
-            entry.session.codex_total_tokens = absolute.total_tokens;
+            entry.session.agent_input_tokens = absolute.input_tokens;
+            entry.session.agent_output_tokens = absolute.output_tokens;
+            entry.session.agent_total_tokens = absolute.total_tokens;
             entry.session.last_reported_input_tokens = absolute.input_tokens;
             entry.session.last_reported_output_tokens = absolute.output_tokens;
             entry.session.last_reported_total_tokens = absolute.total_tokens;
-            self.state.codex_totals.input_tokens = self
+            self.state.agent_totals.input_tokens = self
                 .state
-                .codex_totals
+                .agent_totals
                 .input_tokens
                 .saturating_add(in_delta);
-            self.state.codex_totals.output_tokens = self
+            self.state.agent_totals.output_tokens = self
                 .state
-                .codex_totals
+                .agent_totals
                 .output_tokens
                 .saturating_add(out_delta);
-            self.state.codex_totals.total_tokens = self
+            self.state.agent_totals.total_tokens = self
                 .state
-                .codex_totals
+                .agent_totals
                 .total_tokens
                 .saturating_add(total_delta);
         }
@@ -620,7 +620,7 @@ impl Orchestrator {
 
     fn update_runtime_total(&mut self, entry: &RunningEntry) {
         let elapsed = entry.started_monotonic.elapsed().as_secs_f64();
-        self.state.codex_totals.seconds_running += elapsed;
+        self.state.agent_totals.seconds_running += elapsed;
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -636,13 +636,13 @@ impl Orchestrator {
                 state: e.issue.state.clone(),
                 session_id: e.session.session_id.clone(),
                 turn_count: e.session.turn_count,
-                last_event: e.session.last_codex_event.clone(),
-                last_message: e.session.last_codex_message.clone(),
+                last_event: e.session.last_agent_event.clone(),
+                last_message: e.session.last_agent_message.clone(),
                 started_at: e.started_at,
-                last_event_at: e.session.last_codex_timestamp,
-                input_tokens: e.session.codex_input_tokens,
-                output_tokens: e.session.codex_output_tokens,
-                total_tokens: e.session.codex_total_tokens,
+                last_event_at: e.session.last_agent_timestamp,
+                input_tokens: e.session.agent_input_tokens,
+                output_tokens: e.session.agent_output_tokens,
+                total_tokens: e.session.agent_total_tokens,
             })
             .collect();
         let retrying = self
@@ -661,7 +661,7 @@ impl Orchestrator {
                 error: r.error.clone(),
             })
             .collect();
-        let mut totals = self.state.codex_totals.clone();
+        let mut totals = self.state.agent_totals.clone();
         for entry in self.state.running.values() {
             totals.seconds_running += entry.started_monotonic.elapsed().as_secs_f64();
         }
@@ -669,7 +669,7 @@ impl Orchestrator {
             generated_at: now_utc,
             running,
             retrying,
-            codex_totals: totals,
+            agent_totals: totals,
         }
     }
 

@@ -10,7 +10,7 @@ pub struct RuntimeEvent {
     pub event: String,
     #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
-    pub codex_app_server_pid: Option<String>,
+    pub agent_runner_pid: Option<String>,
     pub usage: Option<TokenUsage>,
     /// Absolute thread totals when the upstream payload provides them
     /// (`thread/tokenUsage/updated`); separate from `usage` so the
@@ -37,7 +37,7 @@ impl RuntimeEvent {
         Self {
             event: event.into(),
             timestamp: OffsetDateTime::now_utc(),
-            codex_app_server_pid: None,
+            agent_runner_pid: None,
             usage: None,
             thread_total_usage: None,
             session_id: None,

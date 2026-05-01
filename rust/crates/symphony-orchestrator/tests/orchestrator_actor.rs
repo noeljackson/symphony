@@ -102,6 +102,7 @@ fn make_config(max_concurrent: usize) -> Arc<ServiceConfig> {
             ..Default::default()
         },
         agent: AgentConfig {
+            backend: symphony_core::config::AgentBackend::Codex,
             max_concurrent_agents: max_concurrent,
             max_turns: 20,
             max_retry_backoff_ms: 300_000,
@@ -303,7 +304,7 @@ async fn refresh_now_returns_when_tick_finishes() {
 }
 
 #[tokio::test]
-async fn snapshot_reports_running_and_codex_totals() {
+async fn snapshot_reports_running_and_agent_totals() {
     let cfg = make_config(10);
     let tracker = Arc::new(MemoryTracker::with_issues(vec![issue("a", "MT-1", "Todo")]));
     let runner = ScriptedRunner::new(vec![]);
@@ -321,7 +322,7 @@ async fn snapshot_reports_running_and_codex_totals() {
     });
     handle
         .raw_sender()
-        .send(OrchestratorCommand::CodexUpdate {
+        .send(OrchestratorCommand::AgentUpdate {
             issue_id: "a".into(),
             event: Box::new(event),
         })
@@ -332,6 +333,6 @@ async fn snapshot_reports_running_and_codex_totals() {
     let snap = handle.snapshot().await.unwrap();
     assert_eq!(snap.running.len(), 1);
     assert_eq!(snap.running[0].identifier, "MT-1");
-    assert_eq!(snap.codex_totals.total_tokens, 140);
+    assert_eq!(snap.agent_totals.total_tokens, 140);
     handle.shutdown().await;
 }
