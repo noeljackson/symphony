@@ -12,7 +12,7 @@ use symphony_core::config::ServiceConfig;
 use symphony_core::Issue;
 use symphony_tracker::{IssueState, Tracker};
 use time::OffsetDateTime;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::dispatch::{
@@ -83,10 +83,25 @@ pub struct Snapshot {
     pub agent_totals: crate::state::CodexTotals,
 }
 
+/// SSE-friendly snapshot of one agent update plus identifying context.
+/// Carried on the broadcast channel that backs `GET /api/v1/events`.
+#[derive(Debug, Clone)]
+pub struct EventBroadcast {
+    pub issue_id: String,
+    pub identifier: String,
+    pub event: Box<RuntimeEvent>,
+}
+
+/// Capacity of the in-process event broadcast channel. Subscribers that fall
+/// behind by more than this number of events get a `Lagged` notice and must
+/// re-snapshot per SPEC §13.7.4.
+pub const EVENT_BROADCAST_CAPACITY: usize = 256;
+
 /// Public handle the rest of the system uses to talk to the orchestrator.
 #[derive(Clone)]
 pub struct OrchestratorHandle {
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    events_tx: broadcast::Sender<EventBroadcast>,
 }
 
 impl OrchestratorHandle {
@@ -130,6 +145,13 @@ impl OrchestratorHandle {
     pub fn raw_sender(&self) -> mpsc::Sender<OrchestratorCommand> {
         self.cmd_tx.clone()
     }
+
+    /// Subscribe to the live agent-event broadcast (SPEC §13.7.4 backing
+    /// store). Each subscriber gets a fresh `broadcast::Receiver`; lagging
+    /// subscribers see `RecvError::Lagged` and SHOULD re-snapshot.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<EventBroadcast> {
+        self.events_tx.subscribe()
+    }
 }
 
 pub struct Orchestrator {
@@ -139,6 +161,7 @@ pub struct Orchestrator {
     runner: Arc<dyn WorkerRunner>,
     cmd_rx: mpsc::Receiver<OrchestratorCommand>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    events_tx: broadcast::Sender<EventBroadcast>,
     worker_tasks: HashMap<String, JoinHandle<()>>,
     retry_tasks: HashMap<String, JoinHandle<()>>,
     pending_refresh_replies: Vec<oneshot::Sender<()>>,
@@ -154,6 +177,7 @@ impl Orchestrator {
         runner: Arc<dyn WorkerRunner>,
     ) -> (Self, OrchestratorHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
+        let (events_tx, _) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
         let state = OrchestratorState {
             poll_interval_ms: cfg.polling.interval_ms,
             max_concurrent_agents: cfg.agent.max_concurrent_agents,
@@ -166,6 +190,7 @@ impl Orchestrator {
             runner,
             cmd_rx,
             cmd_tx: cmd_tx.clone(),
+            events_tx: events_tx.clone(),
             worker_tasks: HashMap::new(),
             retry_tasks: HashMap::new(),
             pending_refresh_replies: Vec::new(),
@@ -173,7 +198,7 @@ impl Orchestrator {
             auto_schedule: false,
             cleaner: Arc::new(NoopCleaner),
         };
-        let handle = OrchestratorHandle { cmd_tx };
+        let handle = OrchestratorHandle { cmd_tx, events_tx };
         (actor, handle)
     }
 
@@ -570,6 +595,15 @@ impl Orchestrator {
             Some(e) => e,
             None => return,
         };
+        // Broadcast to SSE subscribers (SPEC §13.7.4). `send` only fails when
+        // there are no active receivers, which is fine — events are
+        // observability-only and we never want to block the actor on them.
+        let identifier = entry.identifier.clone();
+        let _ = self.events_tx.send(EventBroadcast {
+            issue_id: issue_id.to_string(),
+            identifier,
+            event: Box::new(event.clone()),
+        });
         entry.session.last_agent_event = Some(event.event.clone());
         entry.session.last_agent_message = event.message.clone();
         entry.session.last_agent_timestamp_monotonic = Some(Instant::now());
