@@ -1,0 +1,13 @@
+[package]
+name = "symphony-workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "rt", "time", "macros", "io-util"] }
+tracing.workspace = true
+symphony-core.workspace = true
