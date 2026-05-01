@@ -19,7 +19,11 @@ use symphony_tracker::Tracker;
 use symphony_workspace::WorkspaceManager;
 
 #[derive(Parser, Debug)]
-#[command(name = "symphony", version, about = "Symphony coding-agent orchestrator")]
+#[command(
+    name = "symphony",
+    version,
+    about = "Symphony coding-agent orchestrator"
+)]
 struct Cli {
     /// Path to `WORKFLOW.md`. Defaults to `./WORKFLOW.md` in the current
     /// working directory.
@@ -137,8 +141,13 @@ async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
 
     let tools: Arc<dyn ToolExecutor> = Arc::new(LinearGraphqlTool::new(graphql_transport));
     let runner = Arc::new(
-        RealWorker::new(cfg.clone(), workspace_mgr.clone(), tracker.clone(), prompt_builder)
-            .with_tools(tools),
+        RealWorker::new(
+            cfg.clone(),
+            workspace_mgr.clone(),
+            tracker.clone(),
+            prompt_builder,
+        )
+        .with_tools(tools),
     );
 
     let cleaner: Arc<dyn WorkspaceCleaner> = Arc::new(WorkspaceManagerCleaner {

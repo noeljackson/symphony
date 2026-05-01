@@ -94,12 +94,10 @@ impl HookRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| WorkspaceError::HookFailed {
-                name: kind.name(),
-                reason: format!("spawn failed: {e}"),
-            })?;
+        let mut child = cmd.spawn().map_err(|e| WorkspaceError::HookFailed {
+            name: kind.name(),
+            reason: format!("spawn failed: {e}"),
+        })?;
 
         let mut stdout = child.stdout.take();
         let mut stderr = child.stderr.take();
@@ -126,26 +124,28 @@ impl HookRunner {
             Err(_elapsed) => {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
-                tracing::warn!(hook = kind.name(), timeout_ms = self.timeout_ms, "hook timed out");
-                return Err(WorkspaceError::HookTimeout(kind.name()));
+                tracing::warn!(
+                    hook = kind.name(),
+                    timeout_ms = self.timeout_ms,
+                    "hook timed out"
+                );
+                Err(WorkspaceError::HookTimeout(kind.name()))
             }
-            Ok(Err(e)) => {
-                return Err(WorkspaceError::HookFailed {
-                    name: kind.name(),
-                    reason: e.to_string(),
-                });
-            }
+            Ok(Err(e)) => Err(WorkspaceError::HookFailed {
+                name: kind.name(),
+                reason: e.to_string(),
+            }),
             Ok(Ok(status)) => {
                 let stdout_truncated = truncate_lossy(&out_buf, LOG_OUTPUT_BYTE_CAP);
                 let stderr_truncated = truncate_lossy(&err_buf, LOG_OUTPUT_BYTE_CAP);
                 let code = status.code().unwrap_or(-1);
                 if status.success() {
-                    return Ok(Some(HookOutcome {
+                    Ok(Some(HookOutcome {
                         kind,
                         status: code,
                         stdout_truncated,
                         stderr_truncated,
-                    }));
+                    }))
                 } else {
                     tracing::warn!(
                         hook = kind.name(),
@@ -153,10 +153,10 @@ impl HookRunner {
                         stderr = %stderr_truncated,
                         "hook exited non-zero"
                     );
-                    return Err(WorkspaceError::HookFailed {
+                    Err(WorkspaceError::HookFailed {
                         name: kind.name(),
                         reason: format!("exit code {code}"),
-                    });
+                    })
                 }
             }
         }
@@ -164,12 +164,7 @@ impl HookRunner {
 
     /// Run a best-effort hook (`after_run`, `before_remove`). Failures and
     /// timeouts are logged and swallowed per SPEC §9.4.
-    pub async fn run_best_effort(
-        &self,
-        kind: HookKind,
-        script: Option<&str>,
-        workspace: &Path,
-    ) {
+    pub async fn run_best_effort(&self, kind: HookKind, script: Option<&str>, workspace: &Path) {
         debug_assert!(kind.is_best_effort());
         if let Err(e) = self.run(kind, script, workspace).await {
             tracing::warn!(hook = kind.name(), error = %e, "best-effort hook failed");
@@ -195,7 +190,10 @@ mod tests {
     async fn returns_none_when_script_missing() {
         let runner = HookRunner::new(60_000);
         let dir = TempDir::new().unwrap();
-        let out = runner.run(HookKind::AfterCreate, None, dir.path()).await.unwrap();
+        let out = runner
+            .run(HookKind::AfterCreate, None, dir.path())
+            .await
+            .unwrap();
         assert!(out.is_none());
     }
 
@@ -221,7 +219,9 @@ mod tests {
             .unwrap();
         // macOS may prepend `/private/...` to /tmp paths; just compare canonical.
         let expected = dir.path().canonicalize().unwrap();
-        let printed = std::path::PathBuf::from(out.stdout_truncated.trim()).canonicalize().unwrap();
+        let printed = std::path::PathBuf::from(out.stdout_truncated.trim())
+            .canonicalize()
+            .unwrap();
         assert_eq!(printed, expected);
     }
 

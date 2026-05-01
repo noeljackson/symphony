@@ -90,7 +90,9 @@ fn make_config(max_concurrent: usize, stall_ms: i64) -> Arc<ServiceConfig> {
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into(), "Cancelled".into()],
         },
-        polling: PollingConfig { interval_ms: 30_000 },
+        polling: PollingConfig {
+            interval_ms: 30_000,
+        },
         workspace: WorkspaceConfig {
             root: PathBuf::from("/tmp/sym-conf"),
         },
@@ -326,11 +328,7 @@ async fn slot_exhaustion_requeues_retry_with_reason() {
     // Let the orchestrator process the command + reschedule.
     tokio::time::sleep(Duration::from_millis(50)).await;
     let snap = handle.snapshot().await.unwrap();
-    let mt2_retry = snap
-        .retrying
-        .iter()
-        .find(|r| r.issue_id == "b")
-        .cloned();
+    let mt2_retry = snap.retrying.iter().find(|r| r.issue_id == "b").cloned();
     if let Some(r) = mt2_retry {
         assert_eq!(r.error.as_deref(), Some("no available orchestrator slots"));
     }

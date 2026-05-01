@@ -54,7 +54,9 @@ fn cfg(workspace_root: PathBuf, command: String, before_run: Option<String>) -> 
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into()],
         },
-        polling: PollingConfig { interval_ms: 30_000 },
+        polling: PollingConfig {
+            interval_ms: 30_000,
+        },
         workspace: WorkspaceConfig {
             root: workspace_root,
         },
@@ -122,7 +124,10 @@ async fn real_worker_runs_turn_to_success_when_state_goes_terminal() {
     let outcome = runner.run(issue("Todo"), None, events_tx).await;
 
     assert_eq!(outcome, WorkerOutcome::Success);
-    assert!(root.path().join("MT-1").is_dir(), "workspace must be reused");
+    assert!(
+        root.path().join("MT-1").is_dir(),
+        "workspace must be reused"
+    );
 
     let mut events = Vec::new();
     while let Ok(ev) = tokio::time::timeout(Duration::from_millis(50), events_rx.recv()).await {
