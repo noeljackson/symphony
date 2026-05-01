@@ -1911,6 +1911,72 @@ API design notes:
 - If the dashboard is a client-side app, it SHOULD consume this API rather than duplicating state
   logic.
 
+#### 13.7.3 OPTIONAL operator-control endpoints
+
+If the implementation chooses to surface operator controls beyond
+`POST /api/v1/refresh`, the following endpoints are RECOMMENDED for
+interoperability:
+
+- `POST /api/v1/<issue_identifier>/retry`
+  - Force-schedule a retry for an issue currently tracked in the
+    orchestrator's running or retry state.
+  - Suggested response: `202 Accepted` with
+    `{"queued": true, "issue_identifier": "MT-649", "attempt": 2}`.
+  - If the issue is unknown, return `404` with the standard error envelope.
+  - This is a hint to the orchestrator, not a workspace mutation; the
+    next reconcile tick decides whether the retry actually dispatches
+    based on slot availability and tracker state.
+
+- `GET /api/v1/<issue_identifier>/workspace`
+  - Returns a read-only listing of files inside the per-issue workspace
+    so operators can inspect the agent's working state without SSH.
+  - Suggested response shape:
+
+    ```json
+    {
+      "issue_identifier": "MT-649",
+      "workspace_path": "/tmp/symphony_workspaces/MT-649",
+      "entries": [
+        {"path": "src/main.rs", "size": 1024, "kind": "file"},
+        {"path": ".git", "size": 0, "kind": "dir"}
+      ],
+      "total_bytes": 12345
+    }
+    ```
+  - Implementations MUST validate path-traversal queries (no `..`),
+    SHOULD truncate large directory listings, and SHOULD NOT serve
+    binary blobs over this endpoint by default.
+
+- `GET /api/v1/<issue_identifier>/workspace/<file_path>`
+  - Returns the raw bytes of one file under the per-issue workspace,
+    enforcing the §9.5 root-prefix containment invariant.
+  - Implementations SHOULD cap response size, set
+    `Content-Type: text/plain; charset=utf-8` when the file is detected
+    as text, and `application/octet-stream` otherwise.
+
+#### 13.7.4 OPTIONAL live event stream
+
+The snapshot polling model in §13.7.2 is sufficient for control surfaces
+but does not give operators a "watch the agent work" experience. An
+implementation MAY expose a Server-Sent Events stream:
+
+- `GET /api/v1/events`
+  - `Content-Type: text/event-stream`.
+  - Each event SHOULD have `event:` set to the `RuntimeEvent.event`
+    string (`session_started`, `turn_completed`, `notification`, etc.)
+    and `data:` set to a JSON object containing at minimum
+    `issue_identifier`, `session_id`, `timestamp`, and any payload
+    fields the implementation chooses to forward.
+  - Implementations SHOULD include an initial `event: snapshot` carrying
+    the same payload as `GET /api/v1/state` so newly-connected clients
+    can render immediately.
+  - Backpressure: if a subscriber falls behind, the implementation MAY
+    drop events for that subscriber rather than buffer indefinitely; a
+    dropped notice (`event: lagged`) SHOULD be sent so the client knows
+    to re-snapshot.
+  - This stream is observability-only and MUST NOT become required for
+    orchestrator correctness.
+
 ## 14. Failure Model and Recovery Strategy
 
 ### 14.1 Failure Classes
@@ -2559,6 +2625,33 @@ Use the same validation profiles as Section 17:
 - `linear_graphql` client-side tool extension exposes raw Linear GraphQL
   access through whichever backend's tool-dispatch mechanism is active,
   using configured Symphony auth.
+- Operator-control endpoints (§13.7.3): force-retry an issue and browse
+  the per-issue workspace from the dashboard so operators don't need
+  shell access to inspect or restart a stuck run.
+- Live event stream (§13.7.4): a Server-Sent Events feed of agent
+  `RuntimeEvent`s so the dashboard can show real-time progress instead
+  of polling snapshots.
+- First-run diagnostic CLI (`symphony doctor`): runs the dispatch
+  preflight (§6.3) plus environment checks — agent backend
+  reachability, workspace root writability, hook script syntax, tracker
+  auth — and prints a pass/fail checklist. SHOULD exit `0` on full
+  green and `1` on any failure.
+- Per-issue logs CLI (`symphony logs <identifier>`): tails the
+  agent-session logs referenced by the snapshot's `agent_session_logs`
+  array without requiring the operator to know the on-disk layout.
+- Per-issue cost tracking + daily budget cap: extends `agent_totals`
+  with a `cost_usd` field, optional `agent.daily_budget_usd` config
+  field, and a hard-stop / warning behavior when the cap is reached.
+  Implementations document whether the cap is per-process, per-project,
+  or per-tracker.
+- WORKFLOW.md JSON schema: a published JSON Schema for the
+  `WORKFLOW.md` front matter so editors (VS Code, Zed, etc.) can offer
+  autocomplete and diagnostics for the §5.3 schema.
+- Multi-workflow process mode: a single `symphony` process drives
+  multiple `WORKFLOW.md` files concurrently, sharing the HTTP server
+  and process lifecycle but maintaining isolated orchestrator state per
+  workflow. Useful when one operator runs Symphony against several
+  Linear projects from one host.
 - TODO: Persist retry queue and session metadata across process restarts.
 - TODO: Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
