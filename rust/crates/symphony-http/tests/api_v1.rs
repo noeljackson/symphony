@@ -217,6 +217,13 @@ async fn issue_endpoint_returns_running_for_known_identifier() {
     let body: Value = reqwest::get(&url).await.unwrap().json().await.unwrap();
     assert_eq!(body["status"], "running");
     assert_eq!(body["issue_identifier"], "MT-1");
+    // SPEC v2 §13.7.2: recent_events is an array surfaced at the top
+    // level of the issue response. It MAY be empty for a freshly-spawned
+    // worker, but it MUST be present.
+    assert!(
+        body["recent_events"].is_array(),
+        "recent_events must be present as an array; got {body}"
+    );
 
     server.shutdown().await;
 }

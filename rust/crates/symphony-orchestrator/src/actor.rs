@@ -20,8 +20,8 @@ use crate::dispatch::{
 };
 use crate::pricing::{builtin_price_table, PriceTable, TokenUsage as PricingTokenUsage};
 use crate::state::{
-    add_cost, budget_cap_reached as state_budget_cap_reached, roll_over_daily_cost, LiveSession,
-    OrchestratorState, RetryEntry, RunningEntry,
+    add_cost, budget_cap_reached as state_budget_cap_reached, push_recent_event,
+    roll_over_daily_cost, LiveSession, OrchestratorState, RecentEvent, RetryEntry, RunningEntry,
 };
 use crate::worker::{WorkerOutcome, WorkerRunner};
 use crate::workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
@@ -88,6 +88,9 @@ pub struct SnapshotRunningRow {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+    /// SPEC v2 §13.7.2 ring buffer of recent events. Cleared on session
+    /// restart; clients SHOULD treat oldest-to-newest as a backfill.
+    pub recent_events: Vec<RecentEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -724,6 +727,16 @@ impl Orchestrator {
         entry.session.last_agent_message = event.message.clone();
         entry.session.last_agent_timestamp_monotonic = Some(Instant::now());
         entry.session.last_agent_timestamp = Some(event.timestamp);
+        // SPEC v2 §13.7.2: append to the per-issue ring buffer surfaced by
+        // GET /api/v1/<id>.recent_events.
+        push_recent_event(
+            &mut entry.session.recent_events,
+            RecentEvent {
+                at: event.timestamp,
+                event: event.event.clone(),
+                message: event.message.clone(),
+            },
+        );
         entry.session.session_id = event
             .session_id
             .clone()
@@ -861,6 +874,7 @@ impl Orchestrator {
                 input_tokens: e.session.agent_input_tokens,
                 output_tokens: e.session.agent_output_tokens,
                 total_tokens: e.session.agent_total_tokens,
+                recent_events: e.session.recent_events.iter().cloned().collect(),
             })
             .collect();
         let retrying = self
