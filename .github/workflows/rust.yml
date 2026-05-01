@@ -41,7 +41,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --verbose -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --verbose -- --nocapture --test-threads=1
