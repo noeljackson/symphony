@@ -63,6 +63,7 @@ fn cfg() -> Arc<ServiceConfig> {
             max_turns: 1,
             max_retry_backoff_ms: 300_000,
             max_concurrent_agents_by_state: std::collections::BTreeMap::new(),
+            daily_budget_usd: None,
         },
         codex: CodexConfig {
             command: "true".into(),

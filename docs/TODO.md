@@ -61,12 +61,23 @@ should land before broader feature work; the rest are pull-as-needed.
   - No need for the operator to know the on-disk layout
   - Tests: round-trip test that boots a fake-agent run, captures logs, then tails them via the CLI
 
-- [ ] **Per-issue cost tracking + daily budget cap** — SPEC §18.2
-  - `cost_usd` field on `agent_totals`
-  - Optional `agent.daily_budget_usd` config field
-  - Documented hard-stop / warning behavior when the cap is reached
-  - Per-process / per-project / per-tracker scope explicitly documented in the implementation
-  - Tests: unit test for cost extraction across each backend's usage payload, plus a budget-cap integration test
+- [x] **Per-issue cost tracking + daily budget cap** — SPEC §13.5 / §5.3.5
+      (spec PR #14, Rust impl PR #15)
+  - `cost_usd` + `cost_usd_today` (Option<f64>) on `agent_totals`,
+    surfaced in `/api/v1/state`
+  - Optional `agent.daily_budget_usd` config field with positive-number
+    validation
+  - Hard-stop on dispatch when `cost_usd_today >= daily_budget_usd`;
+    already-running workers continue. Lazy UTC-day rollover at tick time.
+  - Pluggable `PriceTable` keyed by `(backend, model)`; built-in table is
+    empty today (codex / claude_code are subscription-priced) but
+    `openai_compat` / `anthropic_messages` will populate it when those
+    crates land. `null` cost disables the cap per SPEC §13.5.
+  - Per-process scope; multi-process aggregation is OUT OF SCOPE per
+    SPEC §13.5.
+  - Tests: state-helper unit tests (rollover, cap threshold, no-pricing
+    inertness), pricing-table unit tests, config-parsing tests, and
+    integration tests gating dispatch on the cap.
 
 - [x] **WORKFLOW.md JSON Schema** — SPEC §18.2 (PR #13)
   - Published JSON Schema for the §5.3 front-matter schema

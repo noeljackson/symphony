@@ -106,6 +106,7 @@ fn make_config(max_concurrent: usize, stall_ms: i64) -> Arc<ServiceConfig> {
             max_turns: 20,
             max_retry_backoff_ms: 300_000,
             max_concurrent_agents_by_state: std::collections::BTreeMap::new(),
+            daily_budget_usd: None,
         },
         codex: CodexConfig {
             command: "codex".into(),
