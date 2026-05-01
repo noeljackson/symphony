@@ -16,3 +16,4 @@ time.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 symphony-core.workspace = true
+symphony-codex.workspace = true

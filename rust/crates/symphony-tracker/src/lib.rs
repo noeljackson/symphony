@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod linear;
+pub mod linear_tool;
 pub mod memory;
 pub mod tracker;
 

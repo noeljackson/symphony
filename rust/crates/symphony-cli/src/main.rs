@@ -1,18 +1,20 @@
 //! `symphony` binary. SPEC §17.7.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use symphony_codex::tools::UnsupportedToolExecutor;
+use symphony_codex::tools::ToolExecutor;
 use symphony_core::config::TrackerKind;
 use symphony_core::prompt::PromptBuilder;
 use symphony_core::watcher::{ReloadEvent, WorkflowWatcher};
 use symphony_core::workflow::WorkflowLoader;
 use symphony_core::ServiceConfig;
 use symphony_orchestrator::{Orchestrator, RealWorker};
-use symphony_tracker::linear::{LinearClient, LinearConfig};
+use symphony_tracker::linear::{GraphqlTransport, LinearClient, LinearConfig, ReqwestTransport};
+use symphony_tracker::linear_tool::LinearGraphqlTool;
 use symphony_tracker::Tracker;
 use symphony_workspace::WorkspaceManager;
 
@@ -60,7 +62,7 @@ fn main() -> ExitCode {
     runtime.block_on(async move { run(path, cli.port).await })
 }
 
-async fn run(path: PathBuf, _port_override: Option<u16>) -> ExitCode {
+async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
     let definition = match WorkflowLoader::load(&path) {
         Ok(d) => d,
         Err(e) => {
@@ -81,25 +83,33 @@ async fn run(path: PathBuf, _port_override: Option<u16>) -> ExitCode {
     }
     let cfg = Arc::new(cfg);
 
-    let tracker: Arc<dyn Tracker> = match cfg.tracker.kind {
-        TrackerKind::Linear => match LinearClient::new(LinearConfig {
-            endpoint: cfg.tracker.endpoint.clone(),
-            api_key: cfg.tracker.api_key.clone().unwrap_or_default(),
-            project_slug: cfg.tracker.project_slug.clone().unwrap_or_default(),
-            active_states: cfg.tracker.active_states.clone(),
-            terminal_states: cfg.tracker.terminal_states.clone(),
-        }) {
-            Ok(c) => Arc::new(c),
-            Err(e) => {
-                eprintln!("symphony: failed to build Linear client: {e}");
+    let (tracker, graphql_transport): (Arc<dyn Tracker>, Arc<dyn GraphqlTransport>) =
+        match cfg.tracker.kind {
+            TrackerKind::Linear => {
+                let transport: Arc<dyn GraphqlTransport> = Arc::new(ReqwestTransport::new(
+                    cfg.tracker.endpoint.clone(),
+                    cfg.tracker.api_key.clone().unwrap_or_default(),
+                ));
+                let client = match LinearClient::new(LinearConfig {
+                    endpoint: cfg.tracker.endpoint.clone(),
+                    api_key: cfg.tracker.api_key.clone().unwrap_or_default(),
+                    project_slug: cfg.tracker.project_slug.clone().unwrap_or_default(),
+                    active_states: cfg.tracker.active_states.clone(),
+                    terminal_states: cfg.tracker.terminal_states.clone(),
+                }) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("symphony: failed to build Linear client: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                (Arc::new(client), transport)
+            }
+            TrackerKind::Other(ref k) => {
+                eprintln!("symphony: unsupported tracker kind: {k}");
                 return ExitCode::FAILURE;
             }
-        },
-        TrackerKind::Other(ref k) => {
-            eprintln!("symphony: unsupported tracker kind: {k}");
-            return ExitCode::FAILURE;
-        }
-    };
+        };
 
     let workspace_mgr = Arc::new(WorkspaceManager::new(
         cfg.workspace.root.clone(),
@@ -125,9 +135,10 @@ async fn run(path: PathBuf, _port_override: Option<u16>) -> ExitCode {
         tracing::warn!("terminal cleanup fetch failed; continuing startup");
     }
 
+    let tools: Arc<dyn ToolExecutor> = Arc::new(LinearGraphqlTool::new(graphql_transport));
     let runner = Arc::new(
         RealWorker::new(cfg.clone(), workspace_mgr.clone(), tracker.clone(), prompt_builder)
-            .with_tools(Arc::new(UnsupportedToolExecutor)),
+            .with_tools(tools),
     );
 
     let (actor, handle) = Orchestrator::new(cfg.clone(), tracker, runner);
@@ -164,6 +175,24 @@ async fn run(path: PathBuf, _port_override: Option<u16>) -> ExitCode {
         }
     });
 
+    // Boot the optional HTTP server. SPEC §13.7: bind loopback by default.
+    let http_handle = match port_override.or(cfg.server.port) {
+        Some(port) => {
+            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+            match symphony_http::serve(addr, handle.clone()).await {
+                Ok(s) => {
+                    tracing::info!(addr = %s.local_addr, "http server listening");
+                    Some(s)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "http server failed to bind; continuing without it");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     // Schedule the immediate first tick.
     handle.tick().await;
 
@@ -172,6 +201,9 @@ async fn run(path: PathBuf, _port_override: Option<u16>) -> ExitCode {
         tracing::warn!(error = %e, "ctrl-c handler failed");
     }
     tracing::info!("shutting down");
+    if let Some(s) = http_handle {
+        s.shutdown().await;
+    }
     handle.shutdown().await;
     let _ = actor_join.await;
     ExitCode::SUCCESS

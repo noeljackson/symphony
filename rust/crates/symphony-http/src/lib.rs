@@ -1,1 +1,6 @@
-//! Optional HTTP dashboard + JSON API. SPEC §13.7. Phase 7 fills this in.
+//! Optional HTTP dashboard + JSON API. SPEC §13.7.
+
+pub mod api;
+pub mod server;
+
+pub use server::{serve, ServerHandle};

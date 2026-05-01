@@ -12,7 +12,10 @@ pub mod runner;
 pub mod state;
 pub mod worker;
 
-pub use actor::{Orchestrator, OrchestratorCommand, OrchestratorHandle, Snapshot};
+pub use actor::{
+    Orchestrator, OrchestratorCommand, OrchestratorHandle, Snapshot, SnapshotRetryRow,
+    SnapshotRunningRow,
+};
 pub use dispatch::{
     dispatch_eligibility, sort_for_dispatch, DispatchEligibility, EligibilityVerdict,
 };
