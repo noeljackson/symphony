@@ -205,6 +205,113 @@ async fn refresh_endpoint_returns_202_with_queued_payload() {
 }
 
 #[tokio::test]
+async fn events_endpoint_emits_initial_snapshot_and_live_updates() {
+    use std::time::Instant;
+
+    let (addr, server, handle) = boot().await;
+    handle.tick().await;
+
+    // Wait for the worker to be running so subsequent broadcast events have
+    // a stable issue context.
+    let deadline = Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let Some(snap) = handle.snapshot().await {
+            if !snap.running.is_empty() {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!("worker never became running");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let url = format!("http://{addr}/api/v1/events");
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("")
+        .to_string();
+    assert!(ct.contains("text/event-stream"), "ct={ct}");
+
+    let mut body = resp.bytes_stream();
+    use futures::StreamExt;
+    let mut buf = Vec::new();
+
+    // Collect bytes until we see the initial `event: snapshot` block.
+    let read_deadline = Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if Instant::now() >= read_deadline {
+            panic!(
+                "did not see snapshot event within 2s; got bytes: {:?}",
+                String::from_utf8_lossy(&buf)
+            );
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(100), body.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                buf.extend_from_slice(&chunk);
+                let s = String::from_utf8_lossy(&buf);
+                if s.contains("event: snapshot\n") || s.contains("event:snapshot\n") {
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => panic!("stream error: {e}"),
+            Ok(None) => panic!("stream ended before snapshot"),
+            Err(_) => continue,
+        }
+    }
+
+    // Now feed an agent update through the orchestrator and expect a live
+    // event to arrive on the SSE stream.
+    let mut event = symphony_codex::events::RuntimeEvent::new("notification");
+    event.session_id = Some("sess".into());
+    event.thread_id = Some("thr".into());
+    event.turn_id = Some("trn".into());
+    event.message = Some("hello from CI".into());
+    handle
+        .raw_sender()
+        .send(symphony_orchestrator::OrchestratorCommand::AgentUpdate {
+            issue_id: "id-1".into(),
+            event: Box::new(event),
+        })
+        .await
+        .unwrap();
+
+    let live_deadline = Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if Instant::now() >= live_deadline {
+            panic!(
+                "did not see notification event within 2s; got bytes: {:?}",
+                String::from_utf8_lossy(&buf)
+            );
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(100), body.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                buf.extend_from_slice(&chunk);
+                let s = String::from_utf8_lossy(&buf);
+                if s.contains("event: notification") && s.contains("hello from CI") {
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => panic!("stream error: {e}"),
+            Ok(None) => panic!("stream ended before live event"),
+            Err(_) => continue,
+        }
+    }
+
+    drop(body);
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn dashboard_root_serves_html() {
     let (addr, server, _handle) = boot().await;
     let url = format!("http://{addr}/");

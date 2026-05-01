@@ -11,7 +11,7 @@ should land before broader feature work; the rest are pull-as-needed.
 
 ### P0 — operator visibility
 
-- [ ] **Live event stream (SSE)** — SPEC §13.7.4
+- [x] **Live event stream (SSE)** — SPEC §13.7.4 (PR #10)
   - `GET /api/v1/events` with `text/event-stream`
   - Initial `event: snapshot` matches `GET /api/v1/state`
   - Per-event `event:` = `RuntimeEvent.event`, `data:` = `{issue_identifier, session_id, timestamp, …}`
