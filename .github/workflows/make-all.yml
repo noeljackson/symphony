@@ -47,14 +47,11 @@ jobs:
           rc=$?
           if [ $rc -ne 0 ]; then
             mix format
-            {
-              echo '## mix format diff (Elixir 1.19)'
-              echo ''
-              echo '```diff'
-              git --no-pager diff
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
             git --no-pager diff
+            git config user.email "ci@symphony"
+            git config user.name "Symphony CI (mix format)"
+            git commit -am "ci(elixir): apply mix format (Elixir 1.19)" || true
+            git push origin "HEAD:${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" || true
             exit $rc
           fi
 
