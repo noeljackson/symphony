@@ -1897,6 +1897,19 @@ Minimum endpoints:
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.
+  - When the response includes a `recent_events` array, it SHOULD be the
+    most-recent ring-buffer of agent events for the issue's current
+    session, ordered oldest-to-newest. RECOMMENDED cap: 50 events. The
+    buffer MAY be cleared when the session ends and a new dispatch
+    starts. Each entry SHOULD include `at` (RFC3339 timestamp), `event`
+    (event-kind string), and `message` (humanized text or `null`).
+  - When the response includes a `logs.agent_session_logs` array, each
+    entry references an OPTIONAL on-disk log file written by the
+    implementation. Format: `{label, path, url}` (`url` MAY be `null`).
+    Implementations that do not write log files OMIT the array; clients
+    MUST treat its absence as "no log file". The array is informational
+    — clients SHOULD prefer `recent_events` for ring-buffer tailing and
+    SSE (§13.7.4) for live tail.
   - Suggested response shape:
 
     ```json
@@ -2714,9 +2727,28 @@ Use the same validation profiles as Section 17:
   reachability, workspace root writability, hook script syntax, tracker
   auth — and prints a pass/fail checklist. SHOULD exit `0` on full
   green and `1` on any failure.
-- Per-issue logs CLI (`symphony logs <identifier>`): tails the
-  agent-session logs referenced by the snapshot's `agent_session_logs`
-  array without requiring the operator to know the on-disk layout.
+- Per-issue logs CLI (`symphony logs <identifier>`): tails per-issue
+  agent activity without requiring the operator to know the on-disk
+  layout. Behavior:
+  - `--url <url>` (REQUIRED unless a documented default is wired in,
+    such as a local runtime-state file written at startup) points at
+    the running orchestrator's HTTP server (§13.7).
+  - The CLI fetches `GET /api/v1/<identifier>` and prints the entries
+    of the response's `recent_events` array (oldest-to-newest) as the
+    initial backfill.
+  - With `--follow` (default), the CLI MAY then subscribe to
+    `GET /api/v1/events` (§13.7.4) and print events whose
+    `issue_identifier` matches `<identifier>` until interrupted.
+  - With `--no-follow`, the CLI prints the backfill and exits `0`.
+  - When `recent_events` is empty AND the identifier is unknown
+    (`404` from the per-issue endpoint), the CLI exits `1` with a
+    clear message ("issue not tracked").
+  - When `agent_session_logs` is present in the per-issue response,
+    the CLI MAY surface the on-disk path on stderr as a hint, but
+    MUST NOT depend on the file being readable.
+  - The CLI MUST format each event as a single line keyed off `at`
+    (timestamp), `event` (kind), and `message`. Implementations MAY
+    prefix with the issue identifier for readability.
 - WORKFLOW.md JSON schema: a published JSON Schema for the
   `WORKFLOW.md` front matter so editors (VS Code, Zed, etc.) can offer
   autocomplete and diagnostics for the §5.3 schema.
