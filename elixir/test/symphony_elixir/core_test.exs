@@ -177,16 +177,14 @@ defmodule SymphonyElixir.CoreTest do
     workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "PROMPT_ONLY_WORKFLOW.md")
     File.write!(workflow_path, "Prompt only\n")
 
-    assert {:ok, %{config: %{}, prompt: "Prompt only", prompt_template: "Prompt only"}} =
-             Workflow.load(workflow_path)
+    assert {:ok, %{config: %{}, prompt: "Prompt only", prompt_template: "Prompt only"}} = Workflow.load(workflow_path)
   end
 
   test "workflow load accepts unterminated front matter with an empty prompt" do
     workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "UNTERMINATED_WORKFLOW.md")
     File.write!(workflow_path, "---\ntracker:\n  kind: linear\n")
 
-    assert {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}} =
-             Workflow.load(workflow_path)
+    assert {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}} = Workflow.load(workflow_path)
   end
 
   test "workflow load rejects non-map front matter" do
@@ -385,8 +383,7 @@ defmodule SymphonyElixir.CoreTest do
 
       Process.sleep(50)
 
-      assert {:ok, workspace} =
-               SymphonyElixir.PathSafety.canonicalize(Path.join(test_root, issue_identifier))
+      assert {:ok, workspace} = SymphonyElixir.PathSafety.canonicalize(Path.join(test_root, issue_identifier))
 
       File.mkdir_p!(workspace)
 
@@ -588,8 +585,7 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
-             state.retry_attempts[issue_id]
+    assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} = state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 39_500, 40_500)
   end
@@ -627,8 +623,7 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
-             state.retry_attempts[issue_id]
+    assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} = state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 9_000, 10_500)
   end
@@ -688,16 +683,14 @@ defmodule SymphonyElixir.CoreTest do
       agent_rate_limits: nil
     }
 
-    assert {:reply, %{queued: true, coalesced: false}, refreshed_state} =
-             Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, state)
+    assert {:reply, %{queued: true, coalesced: false}, refreshed_state} = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, state)
 
     assert is_reference(refreshed_state.tick_timer_ref)
     assert is_reference(refreshed_state.tick_token)
     refute refreshed_state.tick_token == stale_tick_token
     assert refreshed_state.next_poll_due_at_ms <= System.monotonic_time(:millisecond)
 
-    assert {:reply, %{queued: true, coalesced: true}, coalesced_state} =
-             Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
+    assert {:reply, %{queued: true, coalesced: true}, coalesced_state} = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
 
     assert coalesced_state.tick_token == refreshed_state.tick_token
     assert {:noreply, ^coalesced_state} = Orchestrator.handle_info({:tick, stale_tick_token}, coalesced_state)
@@ -765,8 +758,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "prompt builder renders issue and attempt values from workflow template" do
-    workflow_prompt =
-      "Ticket {{ issue.identifier }} {{ issue.title }} labels={{ issue.labels }} attempt={{ attempt }}"
+    workflow_prompt = "Ticket {{ issue.identifier }} {{ issue.title }} labels={{ issue.labels }} attempt={{ attempt }}"
 
     write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
 
@@ -1059,8 +1051,7 @@ defmodule SymphonyElixir.CoreTest do
       assert :ok = AgentRunner.run(issue)
       entries_after = MapSet.new(File.ls!(workspace_root))
 
-      created =
-        MapSet.difference(entries_after, before) |> Enum.filter(&(&1 == "S-99"))
+      created = MapSet.difference(entries_after, before) |> Enum.filter(&(&1 == "S-99"))
 
       created = MapSet.new(created)
 

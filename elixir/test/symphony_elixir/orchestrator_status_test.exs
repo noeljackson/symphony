@@ -1193,17 +1193,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "status dashboard throttles tps updates to once per second" do
-    {first_second, first_tps} =
-      StatusDashboard.throttled_tps(nil, nil, 10_000, [{9_000, 20}], 40)
+    {first_second, first_tps} = StatusDashboard.throttled_tps(nil, nil, 10_000, [{9_000, 20}], 40)
 
-    {same_second, same_tps} =
-      StatusDashboard.throttled_tps(first_second, first_tps, 10_500, [{9_000, 20}], 200)
+    {same_second, same_tps} = StatusDashboard.throttled_tps(first_second, first_tps, 10_500, [{9_000, 20}], 200)
 
     assert same_second == first_second
     assert same_tps == first_tps
 
-    {next_second, next_tps} =
-      StatusDashboard.throttled_tps(same_second, same_tps, 11_000, [{10_500, 200}], 260)
+    {next_second, next_tps} = StatusDashboard.throttled_tps(same_second, same_tps, 11_000, [{10_500, 200}], 260)
 
     assert next_second == 11
     refute next_tps == same_tps
@@ -1248,8 +1245,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     graph_at_now = StatusDashboard.tps_graph_for_test(samples, now_ms, current_tokens)
 
-    graph_next_second =
-      StatusDashboard.tps_graph_for_test(samples, now_ms + 1_000, next_current_tokens)
+    graph_next_second = StatusDashboard.tps_graph_for_test(samples, now_ms + 1_000, next_current_tokens)
 
     historical_changes =
       graph_at_now
@@ -1396,8 +1392,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Enum.each(event_cases, fn {method, payload, expected_fragment} ->
       message = Map.put(payload, "method", method)
 
-      humanized =
-        StatusDashboard.humanize_codex_message(%{event: :notification, message: message})
+      humanized = StatusDashboard.humanize_codex_message(%{event: :notification, message: message})
 
       assert humanized =~ expected_fragment
     end)

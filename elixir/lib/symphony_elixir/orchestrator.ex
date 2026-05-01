@@ -1339,8 +1339,7 @@ defmodule SymphonyElixir.Orchestrator do
     output_tokens = Map.get(agent_totals, :output_tokens, 0) + token_delta.output_tokens
     total_tokens = Map.get(agent_totals, :total_tokens, 0) + token_delta.total_tokens
 
-    seconds_running =
-      Map.get(agent_totals, :seconds_running, 0) + Map.get(token_delta, :seconds_running, 0)
+    seconds_running = Map.get(agent_totals, :seconds_running, 0) + Map.get(token_delta, :seconds_running, 0)
 
     %{
       input_tokens: max(0, input_tokens),

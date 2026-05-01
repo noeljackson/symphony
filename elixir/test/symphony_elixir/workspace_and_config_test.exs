@@ -136,8 +136,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert {:ok, canonical_outside_root} = SymphonyElixir.PathSafety.canonicalize(outside_root)
       assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
 
-      assert {:error, {:workspace_outside_root, ^canonical_outside_root, ^canonical_workspace_root}} =
-               Workspace.create_for_issue("MT-SYM")
+      assert {:error, {:workspace_outside_root, ^canonical_outside_root, ^canonical_workspace_root}} = Workspace.create_for_issue("MT-SYM")
     after
       File.rm_rf(test_root)
     end
@@ -159,8 +158,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: linked_root)
 
-      assert {:ok, canonical_workspace} =
-               SymphonyElixir.PathSafety.canonicalize(Path.join(actual_root, "MT-LINK"))
+      assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(Path.join(actual_root, "MT-LINK"))
 
       assert {:ok, workspace} = Workspace.create_for_issue("MT-LINK")
       assert workspace == canonical_workspace
@@ -181,11 +179,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       File.mkdir_p!(workspace_root)
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      assert {:ok, canonical_workspace_root} =
-               SymphonyElixir.PathSafety.canonicalize(workspace_root)
+      assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
 
-      assert {:error, {:workspace_equals_root, ^canonical_workspace_root, ^canonical_workspace_root}, ""} =
-               Workspace.remove(workspace_root)
+      assert {:error, {:workspace_equals_root, ^canonical_workspace_root, ^canonical_workspace_root}, ""} = Workspace.remove(workspace_root)
     after
       File.rm_rf(workspace_root)
     end
@@ -204,8 +200,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         hook_after_create: "echo nope && exit 17"
       )
 
-      assert {:error, {:workspace_hook_failed, "after_create", 17, _output}} =
-               Workspace.create_for_issue("MT-FAIL")
+      assert {:error, {:workspace_hook_failed, "after_create", 17, _output}} = Workspace.create_for_issue("MT-FAIL")
     after
       File.rm_rf(workspace_root)
     end
@@ -225,8 +220,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         hook_after_create: "sleep 1"
       )
 
-      assert {:error, {:workspace_hook_timeout, "after_create", 10}} =
-               Workspace.create_for_issue("MT-TIMEOUT")
+      assert {:error, {:workspace_hook_timeout, "after_create", 10}} = Workspace.create_for_issue("MT-TIMEOUT")
     after
       File.rm_rf(workspace_root)
     end
@@ -577,8 +571,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     fetcher = fn ["blocked-2"] -> {:ok, [refreshed_issue]} end
 
-    assert {:skip, %Issue{} = skipped_issue} =
-             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+    assert {:skip, %Issue{} = skipped_issue} = Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
 
     assert skipped_issue.identifier == "MT-1005"
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
@@ -756,8 +749,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert config.codex.thread_sandbox == "workspace-write"
 
-    assert {:ok, canonical_default_workspace_root} =
-             SymphonyElixir.PathSafety.canonicalize(Path.join(System.tmp_dir!(), "symphony_workspaces"))
+    assert {:ok, canonical_default_workspace_root} = SymphonyElixir.PathSafety.canonicalize(Path.join(System.tmp_dir!(), "symphony_workspaces"))
 
     assert Config.codex_turn_sandbox_policy() == %{
              "type" => "workspaceWrite",
@@ -1104,8 +1096,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "excludeSlashTmp" => false
            }
 
-    assert {:ok, remote_policy} =
-             Schema.resolve_runtime_turn_sandbox_policy(settings, nil, remote: true)
+    assert {:ok, remote_policy} = Schema.resolve_runtime_turn_sandbox_policy(settings, nil, remote: true)
 
     assert remote_policy == %{
              "type" => "workspaceWrite",
@@ -1170,8 +1161,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     path = Path.join(System.tmp_dir!(), invalid_segment)
     expanded_path = Path.expand(path)
 
-    assert {:error, {:path_canonicalize_failed, ^expanded_path, :enametoolong}} =
-             SymphonyElixir.PathSafety.canonicalize(path)
+    assert {:error, {:path_canonicalize_failed, ^expanded_path, :enametoolong}} = SymphonyElixir.PathSafety.canonicalize(path)
   end
 
   test "runtime sandbox policy resolution defaults when omitted and ignores workspace for explicit policies" do
@@ -1191,15 +1181,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       settings = Config.settings!()
 
-      assert {:ok, canonical_workspace_root} =
-               SymphonyElixir.PathSafety.canonicalize(workspace_root)
+      assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
 
       assert {:ok, default_policy} = Schema.resolve_runtime_turn_sandbox_policy(settings)
       assert default_policy["type"] == "workspaceWrite"
       assert default_policy["writableRoots"] == [canonical_workspace_root]
 
-      assert {:ok, blank_workspace_policy} =
-               Schema.resolve_runtime_turn_sandbox_policy(settings, "")
+      assert {:ok, blank_workspace_policy} = Schema.resolve_runtime_turn_sandbox_policy(settings, "")
 
       assert blank_workspace_policy == default_policy
 
@@ -1208,19 +1196,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         | codex: %{settings.codex | turn_sandbox_policy: %{"type" => "readOnly", "networkAccess" => true}}
       }
 
-      assert {:ok, %{"type" => "readOnly", "networkAccess" => true}} =
-               Schema.resolve_runtime_turn_sandbox_policy(read_only_settings, 123)
+      assert {:ok, %{"type" => "readOnly", "networkAccess" => true}} = Schema.resolve_runtime_turn_sandbox_policy(read_only_settings, 123)
 
       future_settings = %{
         settings
         | codex: %{settings.codex | turn_sandbox_policy: %{"type" => "futureSandbox", "nested" => %{"flag" => true}}}
       }
 
-      assert {:ok, %{"type" => "futureSandbox", "nested" => %{"flag" => true}}} =
-               Schema.resolve_runtime_turn_sandbox_policy(future_settings, 123)
+      assert {:ok, %{"type" => "futureSandbox", "nested" => %{"flag" => true}}} = Schema.resolve_runtime_turn_sandbox_policy(future_settings, 123)
 
-      assert {:error, {:unsafe_turn_sandbox_policy, {:invalid_workspace_root, 123}}} =
-               Schema.resolve_runtime_turn_sandbox_policy(settings, 123)
+      assert {:error, {:unsafe_turn_sandbox_policy, {:invalid_workspace_root, 123}}} = Schema.resolve_runtime_turn_sandbox_policy(settings, 123)
     after
       File.rm_rf(test_root)
     end

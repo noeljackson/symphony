@@ -14,8 +14,7 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
 
     on_exit(fn ->
       if Process.whereis(SymphonyElixir.PubSub) == nil do
-        assert {:ok, _pid} =
-                 Supervisor.restart_child(SymphonyElixir.Supervisor, pubsub_child_id)
+        assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, pubsub_child_id)
       end
     end)
 
