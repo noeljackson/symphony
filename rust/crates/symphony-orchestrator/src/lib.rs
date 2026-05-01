@@ -13,8 +13,8 @@ pub mod state;
 pub mod worker;
 
 pub use actor::{
-    EventBroadcast, Orchestrator, OrchestratorCommand, OrchestratorHandle, Snapshot,
-    SnapshotRetryRow, SnapshotRunningRow, EVENT_BROADCAST_CAPACITY,
+    EventBroadcast, ForceRetryOutcome, Orchestrator, OrchestratorCommand, OrchestratorHandle,
+    Snapshot, SnapshotRetryRow, SnapshotRunningRow, EVENT_BROADCAST_CAPACITY,
 };
 pub use dispatch::{
     dispatch_eligibility, sort_for_dispatch, DispatchEligibility, EligibilityVerdict,

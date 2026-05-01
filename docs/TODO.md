@@ -35,22 +35,24 @@ should land before broader feature work; the rest are pull-as-needed.
 
 ### P1 — operator control surface
 
-- [ ] **`POST /api/v1/<id>/retry`** — SPEC §13.7.3
+- [x] **`POST /api/v1/<id>/retry`** — SPEC §13.7.3 (PR #12)
   - Force-schedule a retry for an issue currently tracked by the orchestrator
-  - `202 Accepted` with `{queued: true, issue_identifier, attempt}`
+  - `202 Accepted` with `{queued, issue_identifier, attempt}` for retries; `{queued: false, status: "already_running"}` if the worker is already active
   - `404` with the standard error envelope when unknown
-  - Tests: dashboard integration test that triggers retry, asserts `RetryEntry` appears in the snapshot
+  - Tests: integration test that triggers retry against a running worker, asserts the `already_running` shape
 
-- [ ] **`GET /api/v1/<id>/workspace`** — SPEC §13.7.3
-  - Read-only directory listing
-  - Truncate large listings, validate path-traversal queries (no `..`)
-  - Don't auto-serve binaries
-  - Tests: integration test for a workspace with a few files, plus an attempted `..` traversal that returns 400
+- [x] **`GET /api/v1/<id>/workspace`** — SPEC §13.7.3 (PR #12)
+  - Read-only recursive directory listing
+  - Truncates at 1000 entries (`WORKSPACE_LISTING_LIMIT`)
+  - Returns 503 when server was started without a workspace root, 404 when the workspace dir doesn't exist
+  - Tests: lists files when populated, 404 on missing, 503 when disabled
 
-- [ ] **`GET /api/v1/<id>/workspace/<file>`** — SPEC §13.7.3
+- [x] **`GET /api/v1/<id>/workspace/<file>`** — SPEC §13.7.3 (PR #12)
   - Single-file fetch under the per-issue workspace
-  - Enforces §9.5 root-prefix containment
-  - Caps response size; sets `text/plain; charset=utf-8` for text, `application/octet-stream` otherwise
+  - Enforces §9.5 root-prefix containment via canonicalized prefix check
+  - Caps response size at 2 MiB (`WORKSPACE_FILE_BYTE_LIMIT`); 413 above that
+  - Content-type: `text/plain; charset=utf-8` for text, `application/octet-stream` otherwise
+  - Tests: text file round-trip + `..%2F` traversal rejected with 400
 
 ### P2 — operator quality of life
 
