@@ -166,7 +166,10 @@ mod tests {
     fn unknown_filter_is_render_error() {
         let p = PromptBuilder::new("{{ issue.title | nope }}");
         let err = p.render(&sample(), None).unwrap_err();
-        assert!(matches!(err, PromptError::Parse(_) | PromptError::Render(_)));
+        assert!(matches!(
+            err,
+            PromptError::Parse(_) | PromptError::Render(_)
+        ));
     }
 
     #[test]

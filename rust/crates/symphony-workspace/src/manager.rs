@@ -66,7 +66,10 @@ impl WorkspaceManager {
                 if !meta.is_dir() {
                     return Err(WorkspaceError::Io(std::io::Error::new(
                         std::io::ErrorKind::AlreadyExists,
-                        format!("workspace path exists but is not a directory: {}", path.display()),
+                        format!(
+                            "workspace path exists but is not a directory: {}",
+                            path.display()
+                        ),
                     )));
                 }
                 false
@@ -199,7 +202,9 @@ mod tests {
     async fn rejects_non_directory_at_workspace_path() {
         let root = TempDir::new().unwrap();
         let path = root.path().join("MT-5");
-        tokio::fs::write(&path, b"not a dir".as_slice()).await.unwrap();
+        tokio::fs::write(&path, b"not a dir".as_slice())
+            .await
+            .unwrap();
         let mgr = manager_with(root.path());
         let err = mgr.ensure_for_issue("MT-5").await.unwrap_err();
         assert!(matches!(err, WorkspaceError::Io(_)));

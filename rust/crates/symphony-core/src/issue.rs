@@ -43,9 +43,7 @@ impl Issue {
     pub fn blockers_all_terminal(&self, terminal_states: &[String]) -> bool {
         self.blocked_by.iter().all(|b| match &b.state {
             None => false,
-            Some(s) => terminal_states
-                .iter()
-                .any(|t| t.eq_ignore_ascii_case(s)),
+            Some(s) => terminal_states.iter().any(|t| t.eq_ignore_ascii_case(s)),
         })
     }
 }

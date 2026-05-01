@@ -38,7 +38,7 @@ pub enum OrchestratorCommand {
     },
     CodexUpdate {
         issue_id: String,
-        event: RuntimeEvent,
+        event: Box<RuntimeEvent>,
     },
     RetryFire {
         issue_id: String,
@@ -117,7 +117,10 @@ impl OrchestratorHandle {
     }
 
     pub async fn reload(&self, cfg: Arc<ServiceConfig>) {
-        let _ = self.cmd_tx.send(OrchestratorCommand::ConfigReload(cfg)).await;
+        let _ = self
+            .cmd_tx
+            .send(OrchestratorCommand::ConfigReload(cfg))
+            .await;
     }
 
     pub async fn shutdown(&self) {
@@ -151,9 +154,11 @@ impl Orchestrator {
         runner: Arc<dyn WorkerRunner>,
     ) -> (Self, OrchestratorHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
-        let mut state = OrchestratorState::default();
-        state.poll_interval_ms = cfg.polling.interval_ms;
-        state.max_concurrent_agents = cfg.agent.max_concurrent_agents;
+        let state = OrchestratorState {
+            poll_interval_ms: cfg.polling.interval_ms,
+            max_concurrent_agents: cfg.agent.max_concurrent_agents,
+            ..Default::default()
+        };
         let actor = Orchestrator {
             cfg,
             state,
@@ -210,7 +215,7 @@ impl Orchestrator {
                 self.handle_worker_exit(issue_id, outcome).await;
             }
             OrchestratorCommand::CodexUpdate { issue_id, event } => {
-                self.apply_codex_update(&issue_id, event);
+                self.apply_codex_update(&issue_id, *event);
             }
             OrchestratorCommand::RetryFire { issue_id } => {
                 self.handle_retry_fire(&issue_id).await;
@@ -358,12 +363,7 @@ impl Orchestrator {
         }
     }
 
-    async fn terminate_running(
-        &mut self,
-        issue_id: &str,
-        cleanup_workspace: bool,
-        reason: &str,
-    ) {
+    async fn terminate_running(&mut self, issue_id: &str, cleanup_workspace: bool, reason: &str) {
         if let Some(handle) = self.worker_tasks.remove(issue_id) {
             handle.abort();
         }
@@ -433,7 +433,7 @@ impl Orchestrator {
                 let _ = event_pump_tx
                     .send(OrchestratorCommand::CodexUpdate {
                         issue_id: id_for_event.clone(),
-                        event,
+                        event: Box::new(event),
                     })
                     .await;
             }
@@ -476,11 +476,7 @@ impl Orchestrator {
         error: Option<String>,
         continuation: bool,
     ) {
-        let delay_ms = retry_delay_ms(
-            attempt,
-            self.cfg.agent.max_retry_backoff_ms,
-            continuation,
-        );
+        let delay_ms = retry_delay_ms(attempt, self.cfg.agent.max_retry_backoff_ms, continuation);
         let due_at = Instant::now() + Duration::from_millis(delay_ms);
 
         self.cancel_retry_timer(&issue_id);
@@ -548,7 +544,8 @@ impl Orchestrator {
             EligibilityVerdict::Ok => {
                 self.dispatch(issue, Some(retry_entry.attempt));
             }
-            EligibilityVerdict::GlobalSlotsExhausted | EligibilityVerdict::PerStateSlotsExhausted => {
+            EligibilityVerdict::GlobalSlotsExhausted
+            | EligibilityVerdict::PerStateSlotsExhausted => {
                 self.schedule_retry(
                     issue_id.to_string(),
                     issue.identifier,
@@ -577,7 +574,10 @@ impl Orchestrator {
         entry.session.last_codex_message = event.message.clone();
         entry.session.last_codex_timestamp_monotonic = Some(Instant::now());
         entry.session.last_codex_timestamp = Some(event.timestamp);
-        entry.session.session_id = event.session_id.clone().or(entry.session.session_id.clone());
+        entry.session.session_id = event
+            .session_id
+            .clone()
+            .or(entry.session.session_id.clone());
         entry.session.thread_id = event.thread_id.clone().or(entry.session.thread_id.clone());
         entry.session.turn_id = event.turn_id.clone().or(entry.session.turn_id.clone());
         if event.event == "session_started" {
@@ -600,12 +600,21 @@ impl Orchestrator {
             entry.session.last_reported_input_tokens = absolute.input_tokens;
             entry.session.last_reported_output_tokens = absolute.output_tokens;
             entry.session.last_reported_total_tokens = absolute.total_tokens;
-            self.state.codex_totals.input_tokens =
-                self.state.codex_totals.input_tokens.saturating_add(in_delta);
-            self.state.codex_totals.output_tokens =
-                self.state.codex_totals.output_tokens.saturating_add(out_delta);
-            self.state.codex_totals.total_tokens =
-                self.state.codex_totals.total_tokens.saturating_add(total_delta);
+            self.state.codex_totals.input_tokens = self
+                .state
+                .codex_totals
+                .input_tokens
+                .saturating_add(in_delta);
+            self.state.codex_totals.output_tokens = self
+                .state
+                .codex_totals
+                .output_tokens
+                .saturating_add(out_delta);
+            self.state.codex_totals.total_tokens = self
+                .state
+                .codex_totals
+                .total_tokens
+                .saturating_add(total_delta);
         }
     }
 

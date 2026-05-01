@@ -108,10 +108,7 @@ impl CodexClient {
 
     /// Run the JSON-RPC handshake: `initialize` -> `initialized` notification
     /// -> `thread/start`. Returns the `thread_id` per SPEC §10.2.
-    pub async fn start_session(
-        &mut self,
-        workspace_cwd: &str,
-    ) -> Result<String, CodexError> {
+    pub async fn start_session(&mut self, workspace_cwd: &str) -> Result<String, CodexError> {
         // initialize
         self.send(&json!({
             "jsonrpc": "2.0",
@@ -279,7 +276,11 @@ impl CodexClient {
         turn_id: &str,
     ) -> Result<FlowControl, CodexError> {
         // Method-bearing messages drive the turn lifecycle.
-        if let Some(method) = msg.get("method").and_then(|v| v.as_str()).map(str::to_string) {
+        if let Some(method) = msg
+            .get("method")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        {
             return self
                 .handle_method(&method, msg, session_id, thread_id, turn_id)
                 .await;
@@ -333,12 +334,26 @@ impl CodexClient {
                 Ok(FlowControl::Continue)
             }
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
-                self.handle_approval(method, msg, session_id, thread_id, turn_id, "acceptForSession")
-                    .await
+                self.handle_approval(
+                    method,
+                    msg,
+                    session_id,
+                    thread_id,
+                    turn_id,
+                    "acceptForSession",
+                )
+                .await
             }
             "applyPatchApproval" => {
-                self.handle_approval(method, msg, session_id, thread_id, turn_id, "approved_for_session")
-                    .await
+                self.handle_approval(
+                    method,
+                    msg,
+                    session_id,
+                    thread_id,
+                    turn_id,
+                    "approved_for_session",
+                )
+                .await
             }
             "item/tool/call" => {
                 self.handle_tool_call(method, msg, session_id, thread_id, turn_id)
@@ -600,9 +615,7 @@ mod tests {
         assert_eq!(thread_start["params"]["cwd"], "/tmp/issue-1");
         assert_eq!(thread_start["params"]["approvalPolicy"], "never");
         server_outbox
-            .send(
-                r#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-1"}}}"#.into(),
-            )
+            .send(r#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-1"}}}"#.into())
             .unwrap();
 
         let thread_id = h.await.unwrap().unwrap();
@@ -625,10 +638,7 @@ mod tests {
             // thread/start
             let _ = server_inbox.recv().await.unwrap();
             server_outbox
-                .send(
-                    r#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-1"}}}"#
-                        .into(),
-                )
+                .send(r#"{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-1"}}}"#.into())
                 .unwrap();
         };
         let (_, r) = tokio::join!(h, client.start_session("/tmp/issue-1"));
@@ -765,10 +775,7 @@ mod tests {
             .send(r#"{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"t1"}}}"#.into())
             .unwrap();
         server_outbox
-            .send(
-                r#"{"jsonrpc":"2.0","method":"turn/failed","params":{"message":"oops"}}"#
-                    .into(),
-            )
+            .send(r#"{"jsonrpc":"2.0","method":"turn/failed","params":{"message":"oops"}}"#.into())
             .unwrap();
 
         let err = h.await.unwrap().unwrap_err();
@@ -830,9 +837,7 @@ mod tests {
         server_outbox
             .send(r#"{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"t1"}}}"#.into())
             .unwrap();
-        server_outbox
-            .send("not-json-{}".into())
-            .unwrap();
+        server_outbox.send("not-json-{}".into()).unwrap();
         server_outbox
             .send(r#"{"jsonrpc":"2.0","method":"turn/completed","params":{}}"#.into())
             .unwrap();

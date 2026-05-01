@@ -82,14 +82,15 @@ async fn get_state(State(s): State<AppState>) -> impl IntoResponse {
             let view = StateView::from_snapshot(&snap, None);
             (StatusCode::OK, Json(serde_json::to_value(view).unwrap())).into_response()
         }
-        None => json_error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "snapshot timed out"),
+        None => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "snapshot timed out",
+        ),
     }
 }
 
-async fn get_issue(
-    State(s): State<AppState>,
-    Path(identifier): Path<String>,
-) -> impl IntoResponse {
+async fn get_issue(State(s): State<AppState>, Path(identifier): Path<String>) -> impl IntoResponse {
     let snap = match s.handle.snapshot().await {
         Some(s) => s,
         None => {
@@ -172,7 +173,9 @@ fn render_dashboard(view: &StateView) -> String {
     if view.retrying.is_empty() {
         html.push_str("<p>no retries pending</p>");
     } else {
-        html.push_str("<table><tr><th>identifier</th><th>attempt</th><th>due_at</th><th>error</th></tr>");
+        html.push_str(
+            "<table><tr><th>identifier</th><th>attempt</th><th>due_at</th><th>error</th></tr>",
+        );
         for r in &view.retrying {
             html.push_str(&format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",

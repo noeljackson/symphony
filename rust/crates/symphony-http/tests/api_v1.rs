@@ -47,7 +47,9 @@ fn cfg() -> Arc<ServiceConfig> {
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into()],
         },
-        polling: PollingConfig { interval_ms: 30_000 },
+        polling: PollingConfig {
+            interval_ms: 30_000,
+        },
         workspace: WorkspaceConfig {
             root: PathBuf::from("/tmp/sym-http"),
         },
@@ -93,7 +95,11 @@ fn issue() -> Issue {
     }
 }
 
-async fn boot() -> (SocketAddr, symphony_http::ServerHandle, symphony_orchestrator::OrchestratorHandle) {
+async fn boot() -> (
+    SocketAddr,
+    symphony_http::ServerHandle,
+    symphony_orchestrator::OrchestratorHandle,
+) {
     let cfg = cfg();
     let tracker = Arc::new(MemoryTracker::with_issues(vec![issue()]));
     let runner = Arc::new(StallRunner::default());
