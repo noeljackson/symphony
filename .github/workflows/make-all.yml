@@ -55,31 +55,16 @@ jobs:
           rc=$?
           if [ $rc -ne 0 ]; then
             mix format
-            git --no-pager diff
-            if [ -n "$PR_NUMBER" ]; then
-              python3 - <<'PY'
-import json, os, subprocess, urllib.request
-diff = subprocess.check_output(['git', '--no-pager', 'diff']).decode('utf-8', 'replace')
-if not diff.strip():
-    raise SystemExit(0)
-body = "## mix format diff (Elixir 1.19)\n\n```diff\n" + diff + "\n```"
-data = json.dumps({"body": body}).encode()
-pr = os.environ['PR_NUMBER']
-repo = os.environ['REPO']
-url = f"https://api.github.com/repos/{repo}/issues/{pr}/comments"
-req = urllib.request.Request(
-    url, data=data,
-    headers={
-        "Authorization": f"token {os.environ['GH_TOKEN']}",
-        "Accept": "application/vnd.github+json",
-    },
-)
-try:
-    resp = urllib.request.urlopen(req)
-    print("comment posted:", resp.status)
-except Exception as e:
-    print("comment post failed:", e)
-PY
+            git --no-pager diff > /tmp/fmt.diff
+            cat /tmp/fmt.diff
+            if [ -n "$PR_NUMBER" ] && [ -s /tmp/fmt.diff ]; then
+              jq -Rs '{"body": ("## mix format diff (Elixir 1.19)\n\n```diff\n" + . + "\n```")}' /tmp/fmt.diff > /tmp/fmt.json
+              curl -fsSL -X POST \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -d @/tmp/fmt.json \
+                "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
+                && echo comment-posted || echo comment-post-failed
             fi
             exit $rc
           fi
