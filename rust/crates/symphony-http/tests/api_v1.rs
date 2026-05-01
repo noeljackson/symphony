@@ -126,6 +126,34 @@ async fn boot() -> (
     (addr, server, handle)
 }
 
+async fn boot_with_workspace(
+    workspace_root: PathBuf,
+) -> (
+    SocketAddr,
+    symphony_http::ServerHandle,
+    symphony_orchestrator::OrchestratorHandle,
+) {
+    let mut base = (*cfg()).clone();
+    base.workspace.root = workspace_root.clone();
+    let cfg = Arc::new(base);
+    let tracker = Arc::new(MemoryTracker::with_issues(vec![issue()]));
+    let runner = Arc::new(StallRunner::default());
+    let (actor, handle) = Orchestrator::new(cfg, tracker, runner);
+    tokio::spawn(async move {
+        let _ = actor.run().await;
+    });
+
+    let server = symphony_http::serve_with_workspace(
+        "127.0.0.1:0".parse().unwrap(),
+        handle.clone(),
+        workspace_root,
+    )
+    .await
+    .unwrap();
+    let addr = server.local_addr;
+    (addr, server, handle)
+}
+
 #[tokio::test]
 async fn state_endpoint_returns_running_and_totals_after_dispatch() {
     let (addr, server, handle) = boot().await;
@@ -326,5 +354,135 @@ async fn dashboard_root_serves_html() {
     assert!(ct.contains("text/html"));
     let body = resp.text().await.unwrap();
     assert!(body.contains("Symphony"));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn retry_endpoint_returns_404_for_unknown_identifier() {
+    let (addr, server, _handle) = boot().await;
+    let url = format!("http://{addr}/api/v1/UNKNOWN/retry");
+    let resp = reqwest::Client::new().post(&url).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "issue_not_found");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn retry_endpoint_reports_already_running_when_worker_active() {
+    let (addr, server, handle) = boot().await;
+    handle.tick().await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let Some(snap) = handle.snapshot().await {
+            if !snap.running.is_empty() {
+                break;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("worker never became running");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let url = format!("http://{addr}/api/v1/MT-1/retry");
+    let resp = reqwest::Client::new().post(&url).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 202);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["queued"], false);
+    assert_eq!(body["status"], "already_running");
+    assert_eq!(body["issue_identifier"], "MT-1");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_endpoint_returns_503_when_disabled() {
+    let (addr, server, _handle) = boot().await;
+    let url = format!("http://{addr}/api/v1/MT-1/workspace");
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "workspace_browser_disabled");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_endpoint_lists_files_when_enabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace_root = tmp.path().to_path_buf();
+    std::fs::create_dir(workspace_root.join("MT-1")).unwrap();
+    std::fs::write(workspace_root.join("MT-1").join("README.md"), b"hi").unwrap();
+    std::fs::create_dir(workspace_root.join("MT-1").join("src")).unwrap();
+    std::fs::write(
+        workspace_root.join("MT-1").join("src").join("main.rs"),
+        b"fn main() {}",
+    )
+    .unwrap();
+
+    let (addr, server, _handle) = boot_with_workspace(workspace_root).await;
+    let url = format!("http://{addr}/api/v1/MT-1/workspace");
+    let body: Value = reqwest::get(&url).await.unwrap().json().await.unwrap();
+    assert_eq!(body["issue_identifier"], "MT-1");
+    assert_eq!(body["truncated"], false);
+    let entries = body["entries"].as_array().unwrap();
+    let paths: Vec<String> = entries
+        .iter()
+        .map(|e| e["path"].as_str().unwrap().to_string())
+        .collect();
+    assert!(paths.iter().any(|p| p == "README.md"));
+    assert!(paths.iter().any(|p| p == "src"));
+    assert!(paths.iter().any(|p| p == "src/main.rs"));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_endpoint_returns_404_for_missing_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (addr, server, _handle) = boot_with_workspace(tmp.path().to_path_buf()).await;
+    let url = format!("http://{addr}/api/v1/MT-1/workspace");
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "workspace_not_found");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_file_endpoint_returns_text_for_text_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace_root = tmp.path().to_path_buf();
+    std::fs::create_dir(workspace_root.join("MT-1")).unwrap();
+    std::fs::write(
+        workspace_root.join("MT-1").join("README.md"),
+        b"hello world\n",
+    )
+    .unwrap();
+
+    let (addr, server, _handle) = boot_with_workspace(workspace_root).await;
+    let url = format!("http://{addr}/api/v1/MT-1/workspace/README.md");
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let ct = resp.headers().get("content-type").cloned();
+    let body = resp.text().await.unwrap();
+    assert_eq!(body, "hello world\n");
+    let ct = ct.unwrap().to_str().unwrap().to_string();
+    assert!(ct.starts_with("text/plain"));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn workspace_file_endpoint_rejects_dotdot_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace_root = tmp.path().to_path_buf();
+    std::fs::create_dir(workspace_root.join("MT-1")).unwrap();
+    std::fs::write(workspace_root.join("secret.txt"), b"sensitive").unwrap();
+
+    let (addr, server, _handle) = boot_with_workspace(workspace_root).await;
+    let url = format!("http://{addr}/api/v1/MT-1/workspace/..%2Fsecret.txt");
+    let resp = reqwest::get(&url).await.unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "invalid_file_path");
     server.shutdown().await;
 }

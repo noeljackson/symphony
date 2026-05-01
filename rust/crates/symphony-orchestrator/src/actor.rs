@@ -47,7 +47,27 @@ pub enum OrchestratorCommand {
     Snapshot {
         reply: oneshot::Sender<Snapshot>,
     },
+    /// SPEC §13.7.3 force-retry. Operators trigger this from the dashboard
+    /// (or any HTTP client) to re-dispatch an issue without waiting for the
+    /// next backoff. The actor decides what to do based on current state and
+    /// replies with [`ForceRetryOutcome`].
+    ForceRetry {
+        issue_id: String,
+        reply: oneshot::Sender<ForceRetryOutcome>,
+    },
     Shutdown,
+}
+
+/// Result of [`OrchestratorCommand::ForceRetry`].
+#[derive(Debug, Clone)]
+pub enum ForceRetryOutcome {
+    /// Worker is currently running; no new dispatch needed.
+    AlreadyRunning { identifier: String },
+    /// A pending retry was bumped and the orchestrator immediately tried to
+    /// re-dispatch.
+    RetryQueued { identifier: String, attempt: u32 },
+    /// The orchestrator wasn't tracking this issue; the request is a no-op.
+    NotTracked,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +160,20 @@ impl OrchestratorHandle {
 
     pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(OrchestratorCommand::Shutdown).await;
+    }
+
+    /// SPEC §13.7.3 force-retry hook. Returns `None` if the actor has shut
+    /// down before the request was processed.
+    pub async fn force_retry(&self, issue_id: String) -> Option<ForceRetryOutcome> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(OrchestratorCommand::ForceRetry {
+                issue_id,
+                reply: tx,
+            })
+            .await
+            .ok()?;
+        rx.await.ok()
     }
 
     pub fn raw_sender(&self) -> mpsc::Sender<OrchestratorCommand> {
@@ -253,10 +287,50 @@ impl Orchestrator {
             OrchestratorCommand::Snapshot { reply } => {
                 let _ = reply.send(self.snapshot());
             }
+            OrchestratorCommand::ForceRetry { issue_id, reply } => {
+                let outcome = self.force_retry(&issue_id).await;
+                let _ = reply.send(outcome);
+            }
             OrchestratorCommand::Shutdown => {
                 // handled by run()
             }
         }
+    }
+
+    /// SPEC §13.7.3 implementation. The actor decides what to do based on
+    /// current state:
+    ///
+    /// - if the issue is already running, signal `AlreadyRunning`;
+    /// - if it has a pending retry, cancel the timer and re-fire immediately
+    ///   via the existing retry path so eligibility / slot rules apply;
+    /// - otherwise the orchestrator isn't tracking it (it was either dropped
+    ///   or never claimed) and the request becomes a no-op.
+    async fn force_retry(&mut self, issue_id: &str) -> ForceRetryOutcome {
+        if let Some(entry) = self.state.running.get(issue_id) {
+            return ForceRetryOutcome::AlreadyRunning {
+                identifier: entry.identifier.clone(),
+            };
+        }
+        if let Some(retry_entry) = self.state.retry_attempts.remove(issue_id) {
+            self.cancel_retry_timer(issue_id);
+            // Re-enter the retry path immediately. handle_retry_fire decides
+            // whether to actually dispatch (slot availability, eligibility),
+            // schedule another retry (slots exhausted), or release the claim
+            // (issue no longer eligible).
+            //
+            // We have to re-insert the entry since handle_retry_fire pops
+            // it from the map.
+            let outcome = ForceRetryOutcome::RetryQueued {
+                identifier: retry_entry.identifier.clone(),
+                attempt: retry_entry.attempt,
+            };
+            self.state
+                .retry_attempts
+                .insert(issue_id.to_string(), retry_entry);
+            self.handle_retry_fire(issue_id).await;
+            return outcome;
+        }
+        ForceRetryOutcome::NotTracked
     }
 
     async fn run_tick(&mut self) {

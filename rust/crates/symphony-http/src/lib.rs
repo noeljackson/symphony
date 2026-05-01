@@ -3,4 +3,4 @@
 pub mod api;
 pub mod server;
 
-pub use server::{serve, ServerHandle};
+pub use server::{serve, serve_with_workspace, ServerHandle};

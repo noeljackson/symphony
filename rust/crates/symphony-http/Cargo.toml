@@ -25,6 +25,7 @@ reqwest = { workspace = true, features = ["stream"] }
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
 serde_yaml = { workspace = true }
+tempfile = "3"
 symphony-codex = { workspace = true }
 symphony-tracker = { workspace = true }
 symphony-orchestrator = { workspace = true }
