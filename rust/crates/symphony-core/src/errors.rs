@@ -29,6 +29,8 @@ pub enum ConfigError {
     MissingTrackerProjectSlug,
     #[error("codex.command must not be empty")]
     EmptyCodexCommand,
+    #[error("claude_code.command must not be empty")]
+    EmptyClaudeCodeCommand,
     /// SPEC v2: backend is in the spec set but this implementation does not
     /// ship it.
     #[error("agent.backend `{0}` is defined by SPEC v2 but not implemented in this build")]

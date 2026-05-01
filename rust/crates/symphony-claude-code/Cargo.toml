@@ -1,5 +1,5 @@
 [package]
-name = "symphony-orchestrator"
+name = "symphony-claude-code"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,20 +10,13 @@ anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
-tokio = { workspace = true, features = ["full"] }
-tokio-util.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "sync", "time"] }
 tracing.workspace = true
 time.workspace = true
 async-trait.workspace = true
-futures.workspace = true
 symphony-core.workspace = true
-symphony-tracker.workspace = true
 symphony-codex.workspace = true
-symphony-claude-code.workspace = true
-symphony-workspace.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"
-serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

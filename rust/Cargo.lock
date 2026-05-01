@@ -1753,6 +1753,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "symphony-claude-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "symphony-codex",
+ "symphony-core",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "symphony-cli"
 version = "0.1.0"
 dependencies = [
@@ -1840,6 +1857,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "symphony-claude-code",
  "symphony-codex",
  "symphony-core",
  "symphony-tracker",
