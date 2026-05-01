@@ -7,11 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use symphony_claude_code::{ClaudeCodeClient, ClaudeCodeLaunch};
 use symphony_codex::{
     ChildChannel, CodexClient, CodexLaunch, RuntimeEvent, SessionPolicies, ToolExecutor,
     TurnRequest, UnsupportedToolExecutor,
 };
-use symphony_core::config::ServiceConfig;
+use symphony_core::config::{AgentBackend, ServiceConfig};
 use symphony_core::prompt::PromptBuilder;
 use symphony_core::Issue;
 use symphony_tracker::Tracker;
@@ -184,11 +185,53 @@ impl WorkerRunner for RealWorker {
         }
 
         let cwd_str = workspace.path.to_string_lossy().to_string();
+
+        let outcome = match self.cfg.agent.backend {
+            AgentBackend::Codex => {
+                self.run_codex_session(&workspace.path, &cwd_str, issue, attempt, events.clone())
+                    .await
+            }
+            AgentBackend::ClaudeCode => {
+                self.run_claude_code_session(
+                    &workspace.path,
+                    &cwd_str,
+                    issue,
+                    attempt,
+                    events.clone(),
+                )
+                .await
+            }
+            ref other => WorkerOutcome::Failure {
+                error: format!("agent.backend `{}` is not implemented", other.as_str()),
+            },
+        };
+
+        self.workspace_mgr
+            .hooks()
+            .run_best_effort(
+                HookKind::AfterRun,
+                self.cfg.hooks.after_run.as_deref(),
+                &workspace.path,
+            )
+            .await;
+        outcome
+    }
+}
+
+impl RealWorker {
+    async fn run_codex_session(
+        &self,
+        workspace_path: &std::path::Path,
+        cwd_str: &str,
+        issue: Issue,
+        attempt: Option<u32>,
+        events: mpsc::Sender<RuntimeEvent>,
+    ) -> WorkerOutcome {
         let mut command = Command::new("bash");
         command
             .arg("-lc")
             .arg(&self.cfg.codex.command)
-            .current_dir(&workspace.path)
+            .current_dir(workspace_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -197,16 +240,8 @@ impl WorkerRunner for RealWorker {
         let child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
-                self.workspace_mgr
-                    .hooks()
-                    .run_best_effort(
-                        HookKind::AfterRun,
-                        self.cfg.hooks.after_run.as_deref(),
-                        &workspace.path,
-                    )
-                    .await;
                 return WorkerOutcome::Failure {
-                    error: format!("codex_not_found: {e}"),
+                    error: format!("agent_runner_not_found: {e}"),
                 };
             }
         };
@@ -214,14 +249,6 @@ impl WorkerRunner for RealWorker {
         let channel = match ChildChannel::new(child) {
             Ok(c) => c,
             Err(e) => {
-                self.workspace_mgr
-                    .hooks()
-                    .run_best_effort(
-                        HookKind::AfterRun,
-                        self.cfg.hooks.after_run.as_deref(),
-                        &workspace.path,
-                    )
-                    .await;
                 return WorkerOutcome::Failure {
                     error: format!("codex spawn: {e}"),
                 };
@@ -229,30 +256,21 @@ impl WorkerRunner for RealWorker {
         };
 
         let launch = CodexLaunch {
-            workspace: workspace.path.clone(),
+            workspace: workspace_path.to_path_buf(),
             policies: self.session_policies(),
             read_timeout: Duration::from_millis(self.cfg.codex.read_timeout_ms),
             turn_timeout: Duration::from_millis(self.cfg.codex.turn_timeout_ms),
         };
-        let mut client =
-            CodexClient::new(channel, events.clone(), launch).with_tools(self.tools.clone());
+        let mut client = CodexClient::new(channel, events, launch).with_tools(self.tools.clone());
 
-        if let Err(e) = client.start_session(&cwd_str).await {
+        if let Err(e) = client.start_session(cwd_str).await {
             client.stop_session().await;
-            self.workspace_mgr
-                .hooks()
-                .run_best_effort(
-                    HookKind::AfterRun,
-                    self.cfg.hooks.after_run.as_deref(),
-                    &workspace.path,
-                )
-                .await;
             return WorkerOutcome::Failure {
                 error: format!("startup_failed: {e}"),
             };
         }
 
-        let mut current_issue = issue.clone();
+        let mut current_issue = issue;
         let mut turn_number: u32 = 1;
         let outcome = loop {
             let prompt_attempt = if turn_number > 1 {
@@ -265,34 +283,19 @@ impl WorkerRunner for RealWorker {
                 Err(e) => {
                     break WorkerOutcome::Failure {
                         error: format!("prompt: {e}"),
-                    }
+                    };
                 }
             };
             let title = format!("{}: {}", current_issue.identifier, current_issue.title);
             let req = TurnRequest { prompt, title };
-            if let Err(e) = client.run_turn(req, &cwd_str).await {
+            if let Err(e) = client.run_turn(req, cwd_str).await {
                 break WorkerOutcome::Failure {
                     error: format!("turn_failed: {e}"),
                 };
             }
-
-            // SPEC §16.5: re-check tracker state to decide whether to start
-            // another continuation turn.
-            match self
-                .tracker
-                .fetch_issue_states_by_ids(&[current_issue.id.clone()])
-                .await
-            {
-                Ok(states) => {
-                    if let Some(state) = states.into_iter().next() {
-                        current_issue.state = state.state;
-                    }
-                }
-                Err(e) => {
-                    break WorkerOutcome::Failure {
-                        error: format!("issue refresh failed: {e}"),
-                    };
-                }
+            match self.refresh_issue_state(&mut current_issue).await {
+                Ok(()) => {}
+                Err(e) => break e,
             }
             if !self.is_active(&current_issue.state) {
                 break WorkerOutcome::Success;
@@ -304,14 +307,115 @@ impl WorkerRunner for RealWorker {
         };
 
         client.stop_session().await;
-        self.workspace_mgr
-            .hooks()
-            .run_best_effort(
-                HookKind::AfterRun,
-                self.cfg.hooks.after_run.as_deref(),
-                &workspace.path,
-            )
-            .await;
         outcome
+    }
+
+    async fn run_claude_code_session(
+        &self,
+        workspace_path: &std::path::Path,
+        cwd_str: &str,
+        issue: Issue,
+        attempt: Option<u32>,
+        events: mpsc::Sender<RuntimeEvent>,
+    ) -> WorkerOutcome {
+        let mut command = Command::new("bash");
+        command
+            .arg("-lc")
+            .arg(&self.cfg.claude_code.command)
+            .current_dir(workspace_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+
+        let child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return WorkerOutcome::Failure {
+                    error: format!("agent_runner_not_found: {e}"),
+                };
+            }
+        };
+
+        let channel = match ChildChannel::new(child) {
+            Ok(c) => c,
+            Err(e) => {
+                return WorkerOutcome::Failure {
+                    error: format!("claude_code spawn: {e}"),
+                };
+            }
+        };
+
+        let launch = ClaudeCodeLaunch {
+            workspace: workspace_path.to_path_buf(),
+            read_timeout: Duration::from_millis(self.cfg.claude_code.read_timeout_ms),
+            turn_timeout: Duration::from_millis(self.cfg.claude_code.turn_timeout_ms),
+        };
+        let mut client =
+            ClaudeCodeClient::new(channel, events, launch).with_tools(self.tools.clone());
+
+        if let Err(e) = client.start_session(cwd_str).await {
+            client.stop_session().await;
+            return WorkerOutcome::Failure {
+                error: format!("startup_failed: {e}"),
+            };
+        }
+
+        let mut current_issue = issue;
+        let mut turn_number: u32 = 1;
+        let outcome = loop {
+            let prompt_attempt = if turn_number > 1 {
+                Some(turn_number)
+            } else {
+                attempt
+            };
+            let prompt = match self.prompt_builder.render(&current_issue, prompt_attempt) {
+                Ok(p) => p,
+                Err(e) => {
+                    break WorkerOutcome::Failure {
+                        error: format!("prompt: {e}"),
+                    };
+                }
+            };
+            let title = format!("{}: {}", current_issue.identifier, current_issue.title);
+            let req = symphony_claude_code::client::TurnRequest { prompt, title };
+            if let Err(e) = client.run_turn(req, cwd_str).await {
+                break WorkerOutcome::Failure {
+                    error: format!("turn_failed: {e}"),
+                };
+            }
+            match self.refresh_issue_state(&mut current_issue).await {
+                Ok(()) => {}
+                Err(e) => break e,
+            }
+            if !self.is_active(&current_issue.state) {
+                break WorkerOutcome::Success;
+            }
+            if turn_number >= self.cfg.agent.max_turns {
+                break WorkerOutcome::Success;
+            }
+            turn_number = turn_number.saturating_add(1);
+        };
+
+        client.stop_session().await;
+        outcome
+    }
+
+    async fn refresh_issue_state(&self, issue: &mut Issue) -> Result<(), WorkerOutcome> {
+        match self
+            .tracker
+            .fetch_issue_states_by_ids(std::slice::from_ref(&issue.id))
+            .await
+        {
+            Ok(states) => {
+                if let Some(state) = states.into_iter().next() {
+                    issue.state = state.state;
+                }
+                Ok(())
+            }
+            Err(e) => Err(WorkerOutcome::Failure {
+                error: format!("issue refresh failed: {e}"),
+            }),
+        }
     }
 }

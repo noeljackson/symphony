@@ -4,6 +4,7 @@ members = [
     "crates/symphony-core",
     "crates/symphony-tracker",
     "crates/symphony-codex",
+    "crates/symphony-claude-code",
     "crates/symphony-workspace",
     "crates/symphony-orchestrator",
     "crates/symphony-http",
@@ -47,6 +48,7 @@ nix = { version = "0.29", features = ["signal"] }
 symphony-core = { path = "crates/symphony-core" }
 symphony-tracker = { path = "crates/symphony-tracker" }
 symphony-codex = { path = "crates/symphony-codex" }
+symphony-claude-code = { path = "crates/symphony-claude-code" }
 symphony-workspace = { path = "crates/symphony-workspace" }
 symphony-orchestrator = { path = "crates/symphony-orchestrator" }
 symphony-http = { path = "crates/symphony-http" }

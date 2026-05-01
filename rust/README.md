@@ -13,14 +13,15 @@ runner is plugged in via `agent.backend` in `WORKFLOW.md`.
 
 | `agent.backend` | Status |
 |---|---|
-| `codex` | Implemented (Phase 4–6) — `symphony-codex` |
-| `claude_code` | TBD — wires the Claude Code CLI in stream-json mode |
+| `codex` | Implemented — `symphony-codex` |
+| `claude_code` | Implemented — `symphony-claude-code` |
 | `openai_compat` | TBD — covers OpenAI, Moonshot Kimi K2, Zhipu GLM, DeepSeek, vLLM, llama.cpp servers |
 | `anthropic_messages` | TBD — Anthropic Messages API |
 
-The `AgentClient` trait that all backends implement lives in
-`symphony-codex` today and will move to `symphony-agent` once the second
-backend lands.
+`RealWorker` dispatches to the right client based on `agent.backend`. Both
+implemented backends share the line-delimited JSON `Channel` + `RuntimeEvent`
++ `ToolExecutor` plumbing from `symphony-codex`; only the wire format and
+session lifecycle differ.
 
 ## Crate layout
 
@@ -28,7 +29,8 @@ backend lands.
 |---|---|
 | `symphony-core` | Domain model, workflow loader, typed config, prompt rendering, watcher |
 | `symphony-tracker` | `Tracker` trait + Linear adapter + `linear_graphql` tool |
-| `symphony-codex` | Codex stdio app-server backend (currently the only implemented `AgentClient`) |
+| `symphony-codex` | Codex stdio app-server backend |
+| `symphony-claude-code` | Claude Code stdio backend (stream-json mode) |
 | `symphony-workspace` | Workspace manager, path safety, hook runner |
 | `symphony-orchestrator` | Single-authority actor: dispatch, retries, reconciliation, `RealWorker` |
 | `symphony-http` | Optional dashboard + JSON API |
