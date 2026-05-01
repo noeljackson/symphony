@@ -102,6 +102,11 @@
           "additionalProperties": { "type": "integer", "minimum": 1 },
           "default": {},
           "description": "Per-state concurrency override. Keys are tracker state names (case-insensitive)."
+        },
+        "daily_budget_usd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Optional cap on cumulative agent USD cost for the current UTC calendar day for this Symphony process. Once cumulative cost reaches the cap, dispatch is blocked until 00:00 UTC. SPEC v2 §5.3.5 / §13.5."
         }
       },
       "required": ["backend"]

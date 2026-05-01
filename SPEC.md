@@ -286,8 +286,9 @@ Fields:
 - `claimed` (set of issue IDs reserved/running/retrying)
 - `retry_attempts` (map `issue_id -> RetryEntry`)
 - `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
-- `agent_totals` (aggregate tokens + runtime seconds)
+- `agent_totals` (aggregate tokens, runtime seconds, and USD cost; see §13.5)
 - `agent_rate_limits` (latest rate-limit snapshot from agent events)
+- `daily_cost_window` (current UTC-day budget window; see §13.5)
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -455,6 +456,20 @@ Fields:
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
   - Invalid entries (non-positive or non-numeric) are ignored.
+- `daily_budget_usd` (positive number, OPTIONAL)
+  - Default: unset (no cap).
+  - Caps cumulative agent cost (in USD) across the current UTC calendar day
+    for this Symphony process. Once `agent_totals.cost_usd_today` reaches or
+    exceeds the cap, the dispatch tick MUST NOT dispatch new issues until the
+    counter resets at 00:00:00 UTC.
+  - Already-running workers continue to completion; the cap gates new
+    dispatches only. Implementations SHOULD emit an operator-visible warning
+    once per UTC day when cumulative cost first crosses 80% of the cap.
+  - Scope is **per Symphony process**. Aggregating cost across multiple
+    Symphony processes, projects, or trackers is OUT OF SCOPE for v2.
+  - Invalid values (`<= 0`, non-numeric) fail configuration validation.
+  - See §13.5 for the cost-accounting model and §16.2 for dispatch-gating
+    pseudocode.
 
 #### 5.3.6 Backend-specific configuration blocks
 
@@ -1683,6 +1698,12 @@ SHOULD return:
   - `output_tokens`
   - `total_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
+  - `cost_usd` (cumulative agent cost in USD since process start; OPTIONAL but
+    RECOMMENDED — `null` when the implementation cannot determine cost for the
+    configured backend)
+  - `cost_usd_today` (cumulative agent cost in USD for the current UTC calendar
+    day; resets at 00:00:00 UTC; OPTIONAL but RECOMMENDED if `cost_usd` is
+    reported. Dispatch gating against `agent.daily_budget_usd` uses this field)
 - `rate_limits` (latest agent backend rate limit payload, if available)
 
 RECOMMENDED snapshot error modes:
@@ -1728,6 +1749,47 @@ Rate-limit tracking:
 
 - Track the latest rate-limit payload seen in any agent update.
 - Any human-readable presentation of rate-limit data is implementation-defined.
+
+Cost accounting:
+
+- Implementations SHOULD compute agent cost in USD from the absolute token
+  totals selected by the rules above. The cost MUST be derived from token
+  counts (input/output/cache/etc.) and a per-model price table, not from
+  vendor-reported dollar figures (which are not part of the wire protocols
+  Symphony consumes).
+- Implementations SHOULD ship a built-in price table for the models they
+  reasonably expect to support (today: published OpenAI, Anthropic, Moonshot,
+  Zhipu rates) and SHOULD allow per-workflow overrides via an OPTIONAL
+  `<backend>.pricing` map keyed by model. The schema of that map is
+  implementation-defined; conformance does not require a specific shape.
+- When the configured backend's pricing is unknown or the model is not in the
+  effective price table, the implementation SHOULD report `cost_usd: null`
+  rather than fabricating a number. A `null` cost MUST disable budget-cap
+  enforcement for that turn (with an operator-visible warning) rather than
+  silently dispatching as if cost were zero.
+- Track two cumulative counters in orchestrator state:
+  - `cost_usd` — lifetime cumulative since process start. Never resets.
+  - `cost_usd_today` — cumulative for the current UTC calendar day. Resets
+    to `0.0` at 00:00:00 UTC on day rollover.
+- Day-rollover handling MUST NOT depend on background ticking. Implementations
+  MAY check the current UTC date during snapshot rendering or before each
+  dispatch decision and reset `cost_usd_today` lazily.
+
+Budget-cap enforcement:
+
+- When `agent.daily_budget_usd` is set, the dispatch tick (§16.2) MUST gate
+  new dispatches on `cost_usd_today < daily_budget_usd`.
+- Already-running workers continue to completion when the cap is reached.
+  Workers MAY exceed the cap during the in-flight turn; only the next
+  dispatch is blocked.
+- Implementations SHOULD emit one operator-visible warning per UTC day when
+  cumulative cost first crosses 80% of the cap, and one operator-visible
+  warning when the cap is reached. Suppress duplicate warnings within the
+  same window.
+- Pending retries scheduled for a future tick MAY remain queued past the
+  cap; their dispatch is gated by the same check on the next tick.
+- Scope is per Symphony process. Multi-process aggregation is OUT OF SCOPE
+  for v2.
 
 ### 13.6 Humanized Agent Event Summaries (OPTIONAL)
 
@@ -1824,7 +1886,9 @@ Minimum endpoints:
         "input_tokens": 5000,
         "output_tokens": 2400,
         "total_tokens": 7400,
-        "seconds_running": 1834.2
+        "seconds_running": 1834.2,
+        "cost_usd": 0.42,
+        "cost_usd_today": 0.42
       },
       "rate_limits": null
     }
@@ -2165,8 +2229,12 @@ function start_service():
     claimed: set(),
     retry_attempts: {},
     completed: set(),
-    agent_totals: {input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-    agent_rate_limits: null
+    agent_totals: {
+      input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0,
+      cost_usd: 0.0, cost_usd_today: 0.0
+    },
+    agent_rate_limits: null,
+    daily_cost_window_utc_date: today_utc_date()
   }
 
   validation = validate_dispatch_config()
@@ -2185,10 +2253,19 @@ function start_service():
 ```text
 on_tick(state):
   state = reconcile_running_issues(state)
+  state = roll_over_daily_cost_if_needed(state)
 
   validation = validate_dispatch_config()
   if validation is not ok:
     log_validation_error(validation)
+    notify_observers()
+    schedule_tick(state.poll_interval_ms)
+    return state
+
+  if budget_cap_reached(state):
+    # Cap enforcement: do not dispatch new issues this tick.
+    # Already-running workers continue. Warning emission is one-shot per UTC day.
+    state = maybe_emit_budget_warnings(state)
     notify_observers()
     schedule_tick(state.poll_interval_ms)
     return state
@@ -2207,6 +2284,7 @@ on_tick(state):
     if should_dispatch(issue, state):
       state = dispatch_issue(issue, state, attempt=null)
 
+  state = maybe_emit_budget_warnings(state)
   notify_observers()
   schedule_tick(state.poll_interval_ms)
   return state
@@ -2639,11 +2717,6 @@ Use the same validation profiles as Section 17:
 - Per-issue logs CLI (`symphony logs <identifier>`): tails the
   agent-session logs referenced by the snapshot's `agent_session_logs`
   array without requiring the operator to know the on-disk layout.
-- Per-issue cost tracking + daily budget cap: extends `agent_totals`
-  with a `cost_usd` field, optional `agent.daily_budget_usd` config
-  field, and a hard-stop / warning behavior when the cap is reached.
-  Implementations document whether the cap is per-process, per-project,
-  or per-tracker.
 - WORKFLOW.md JSON schema: a published JSON Schema for the
   `WORKFLOW.md` front matter so editors (VS Code, Zed, etc.) can offer
   autocomplete and diagnostics for the §5.3 schema.
