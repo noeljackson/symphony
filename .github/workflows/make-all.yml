@@ -46,12 +46,19 @@ jobs:
           mix format --check-formatted
           rc=$?
           if [ $rc -ne 0 ]; then
-            echo "::group::Diff produced by Elixir 1.19's mix format"
             mix format
-            git --no-pager diff
-            echo "::endgroup::"
+            git --no-pager diff > /tmp/fmt.diff || true
+            cat /tmp/fmt.diff
             exit $rc
           fi
+
+      - name: Upload mix format diff (on failure)
+        if: failure()
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4
+        with:
+          name: mix-format-diff
+          path: /tmp/fmt.diff
+          if-no-files-found: ignore
 
       - name: mix lint (specs.check + credo --strict)
         run: make lint
