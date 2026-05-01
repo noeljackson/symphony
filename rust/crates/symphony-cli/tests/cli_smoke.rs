@@ -49,6 +49,43 @@ fn workflow_with_unsupported_tracker_kind_fails_validation() {
 }
 
 #[test]
+fn doctor_with_missing_workflow_exits_nonzero_and_prints_check() {
+    let out = Command::new(binary())
+        .arg("doctor")
+        .arg("/no/such/workflow.md")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("workflow file loadable"));
+    assert!(stdout.contains("✗"));
+    assert!(stdout.contains("check(s) failed"));
+}
+
+#[test]
+fn doctor_reports_missing_dispatch_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow = tmp.path().join("WORKFLOW.md");
+    let mut f = std::fs::File::create(&workflow).unwrap();
+    writeln!(f, "---").unwrap();
+    writeln!(f, "tracker:").unwrap();
+    writeln!(f, "  kind: linear").unwrap();
+    writeln!(f, "  project_slug: demo").unwrap();
+    writeln!(f, "---").unwrap();
+    writeln!(f, "body").unwrap();
+
+    let out = Command::new(binary())
+        .arg("doctor")
+        .arg(&workflow)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("dispatch preflight"));
+    assert!(stdout.contains("api_key"));
+}
+
+#[test]
 fn workflow_with_missing_api_key_fails_preflight() {
     let tmp = tempfile::tempdir().unwrap();
     let workflow = tmp.path().join("WORKFLOW.md");
