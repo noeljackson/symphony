@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   make-all:
     runs-on: ubuntu-latest
@@ -41,7 +45,28 @@ jobs:
         run: make build
 
       - name: mix format --check-formatted
-        run: make fmt-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set +e
+          mix format --check-formatted
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            mix format
+            git --no-pager diff > /tmp/fmt.diff
+            cat /tmp/fmt.diff
+            if [ -n "$PR_NUMBER" ] && [ -s /tmp/fmt.diff ]; then
+              jq -Rs '{"body": ("## mix format diff (Elixir 1.19) iter 2\n\n```diff\n" + . + "\n```")}' /tmp/fmt.diff > /tmp/fmt.json
+              curl -fsSL -X POST \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -d @/tmp/fmt.json \
+                "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" || true
+            fi
+            exit $rc
+          fi
 
       - name: mix lint (specs.check + credo --strict)
         run: make lint
