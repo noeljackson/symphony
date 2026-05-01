@@ -97,6 +97,10 @@ pub struct AgentConfig {
     pub max_retry_backoff_ms: u64,
     /// Keys are normalized to lowercase (SPEC §5.3.5).
     pub max_concurrent_agents_by_state: BTreeMap<String, usize>,
+    /// SPEC v2 §5.3.5: optional per-process cap on cumulative agent USD cost
+    /// for the current UTC calendar day. `None` means no cap. Validation
+    /// rejects values <= 0.
+    pub daily_budget_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -365,12 +369,30 @@ fn parse_agent(map: Option<&Mapping>) -> Result<AgentConfig, ConfigError> {
         }
     }
 
+    let daily_budget_usd = match m.get(Value::from("daily_budget_usd")) {
+        None => None,
+        Some(v) => {
+            let n = v.as_f64().ok_or_else(|| ConfigError::InvalidValue {
+                field: "agent.daily_budget_usd".into(),
+                reason: "must be a positive number".into(),
+            })?;
+            if !n.is_finite() || n <= 0.0 {
+                return Err(ConfigError::InvalidValue {
+                    field: "agent.daily_budget_usd".into(),
+                    reason: "must be a positive number".into(),
+                });
+            }
+            Some(n)
+        }
+    };
+
     Ok(AgentConfig {
         backend,
         max_concurrent_agents,
         max_turns,
         max_retry_backoff_ms,
         max_concurrent_agents_by_state: by_state,
+        daily_budget_usd,
     })
 }
 
@@ -650,6 +672,36 @@ mod tests {
         let cfg = config_from("tracker:\n  kind: jira");
         let err = cfg.validate_for_dispatch().unwrap_err();
         assert!(matches!(err, ConfigError::UnsupportedTrackerKind(_)));
+    }
+
+    #[test]
+    fn parses_daily_budget_usd_when_set() {
+        let cfg = config_from("agent:\n  daily_budget_usd: 12.5");
+        assert_eq!(cfg.agent.daily_budget_usd, Some(12.5));
+    }
+
+    #[test]
+    fn defaults_daily_budget_usd_to_unset() {
+        let cfg = config_from("{}");
+        assert!(cfg.agent.daily_budget_usd.is_none());
+    }
+
+    #[test]
+    fn rejects_zero_or_negative_daily_budget() {
+        for bad in [
+            "agent:\n  daily_budget_usd: 0",
+            "agent:\n  daily_budget_usd: -1.0",
+        ] {
+            let body = format!("---\n{bad}\n---\nbody\n");
+            let mut f = NamedTempFile::new().unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            let def = WorkflowLoader::load(f.path()).unwrap();
+            let err = ServiceConfig::from_workflow(&def).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::InvalidValue { ref field, .. } if field == "agent.daily_budget_usd"),
+                "expected InvalidValue for `agent.daily_budget_usd`, got {err:?}"
+            );
+        }
     }
 
     #[test]
