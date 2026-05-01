@@ -138,6 +138,8 @@ pub struct Orchestrator {
     worker_tasks: HashMap<String, JoinHandle<()>>,
     retry_tasks: HashMap<String, JoinHandle<()>>,
     pending_refresh_replies: Vec<oneshot::Sender<()>>,
+    scheduled_tick: Option<JoinHandle<()>>,
+    auto_schedule: bool,
 }
 
 impl Orchestrator {
@@ -160,9 +162,19 @@ impl Orchestrator {
             worker_tasks: HashMap::new(),
             retry_tasks: HashMap::new(),
             pending_refresh_replies: Vec::new(),
+            scheduled_tick: None,
+            auto_schedule: false,
         };
         let handle = OrchestratorHandle { cmd_tx };
         (actor, handle)
+    }
+
+    /// Enable self-scheduling: after every tick the actor schedules the next
+    /// tick `polling.interval_ms` later. The first tick must still be
+    /// triggered by the caller (e.g. `handle.tick().await`).
+    pub fn with_auto_schedule(mut self, enable: bool) -> Self {
+        self.auto_schedule = enable;
+        self
     }
 
     /// Drive the actor until [`OrchestratorCommand::Shutdown`] is received.
@@ -236,6 +248,22 @@ impl Orchestrator {
             }
         }
         self.flush_refresh_replies();
+        self.schedule_next_tick();
+    }
+
+    fn schedule_next_tick(&mut self) {
+        if !self.auto_schedule {
+            return;
+        }
+        if let Some(handle) = self.scheduled_tick.take() {
+            handle.abort();
+        }
+        let cmd_tx = self.cmd_tx.clone();
+        let interval = Duration::from_millis(self.cfg.polling.interval_ms);
+        self.scheduled_tick = Some(tokio::spawn(async move {
+            tokio::time::sleep(interval).await;
+            let _ = cmd_tx.send(OrchestratorCommand::Tick).await;
+        }));
     }
 
     fn flush_refresh_replies(&mut self) {
@@ -625,6 +653,9 @@ impl Orchestrator {
     }
 
     async fn shutdown(&mut self) {
+        if let Some(h) = self.scheduled_tick.take() {
+            h.abort();
+        }
         for (_, h) in self.worker_tasks.drain() {
             h.abort();
         }

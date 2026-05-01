@@ -1764,6 +1764,7 @@ dependencies = [
  "symphony-orchestrator",
  "symphony-tracker",
  "symphony-workspace",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

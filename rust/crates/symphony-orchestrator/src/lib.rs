@@ -8,6 +8,7 @@
 
 pub mod actor;
 pub mod dispatch;
+pub mod runner;
 pub mod state;
 pub mod worker;
 
@@ -16,4 +17,5 @@ pub use dispatch::{
     dispatch_eligibility, sort_for_dispatch, DispatchEligibility, EligibilityVerdict,
 };
 pub use state::{CodexTotals, LiveSession, OrchestratorState, RetryEntry, RunningEntry};
+pub use runner::RealWorker;
 pub use worker::{WorkerExit, WorkerOutcome, WorkerRunner};
