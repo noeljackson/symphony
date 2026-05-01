@@ -107,6 +107,7 @@ fn make_config(max_concurrent: usize) -> Arc<ServiceConfig> {
             max_turns: 20,
             max_retry_backoff_ms: 300_000,
             max_concurrent_agents_by_state: std::collections::BTreeMap::new(),
+            daily_budget_usd: None,
         },
         codex: CodexConfig {
             command: "codex".into(),
@@ -345,4 +346,65 @@ async fn snapshot_reports_running_and_agent_totals() {
     assert_eq!(snap.running[0].identifier, "MT-1");
     assert_eq!(snap.agent_totals.total_tokens, 140);
     handle.shutdown().await;
+}
+
+/// SPEC v2 §13.5 / §16.2: when `agent.daily_budget_usd` is set and the
+/// running cumulative `cost_usd_today` reaches the cap, dispatch must
+/// be skipped. Already-running workers continue (none here).
+#[tokio::test]
+async fn budget_cap_blocks_new_dispatches() {
+    let cfg = {
+        let mut cfg = (*make_config(10)).clone();
+        cfg.agent.daily_budget_usd = Some(1.00);
+        Arc::new(cfg)
+    };
+    let tracker = Arc::new(MemoryTracker::with_issues(vec![issue("a", "MT-1", "Todo")]));
+    let runner = ScriptedRunner::new(vec![]);
+    let _gate = runner.arm_gate();
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let (actor, handle) = Orchestrator::new(cfg, tracker, runner.clone());
+    let actor = actor.with_seeded_cost_totals(Some(1.50), Some(1.50), Some(today));
+    let join = tokio::spawn(async move {
+        let _ = actor.run().await;
+    });
+
+    handle.tick().await;
+    // Give the actor a beat to attempt (or not attempt) dispatches.
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    assert_eq!(
+        runner.dispatched().len(),
+        0,
+        "dispatch must be skipped while cost_usd_today >= daily_budget_usd"
+    );
+
+    let snap = handle.snapshot().await.unwrap();
+    assert_eq!(snap.agent_totals.cost_usd_today, Some(1.50));
+    assert_eq!(snap.agent_totals.cost_usd, Some(1.50));
+
+    handle.shutdown().await;
+    let _ = join.await;
+}
+
+/// Mirror of the cap test: clearing the budget lets the dispatch through
+/// even when `cost_usd_today` is high. Confirms the gate isn't accidental.
+#[tokio::test]
+async fn dispatch_proceeds_when_budget_unset() {
+    let cfg = make_config(10); // daily_budget_usd: None
+    let tracker = Arc::new(MemoryTracker::with_issues(vec![issue("a", "MT-1", "Todo")]));
+    let runner = ScriptedRunner::new(vec![]);
+    let _gate = runner.arm_gate();
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let (actor, handle) = Orchestrator::new(cfg, tracker, runner.clone());
+    let actor = actor.with_seeded_cost_totals(Some(1_000.0), Some(1_000.0), Some(today));
+    let join = tokio::spawn(async move {
+        let _ = actor.run().await;
+    });
+
+    handle.tick().await;
+    wait_for_dispatches(&runner, 1).await;
+    assert_eq!(runner.dispatched().len(), 1);
+    handle.shutdown().await;
+    let _ = join.await;
 }

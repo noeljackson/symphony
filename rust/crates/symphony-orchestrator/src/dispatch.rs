@@ -191,6 +191,7 @@ mod tests {
                 max_turns: 20,
                 max_retry_backoff_ms: 300_000,
                 max_concurrent_agents_by_state: by_state_map,
+                daily_budget_usd: None,
             },
             codex: CodexConfig {
                 command: "codex".into(),

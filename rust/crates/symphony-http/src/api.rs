@@ -58,6 +58,12 @@ pub struct TotalsView {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub seconds_running: f64,
+    /// SPEC v2 §13.3: cumulative agent USD cost since process start. `null`
+    /// when the implementation cannot price the configured backend.
+    pub cost_usd: Option<f64>,
+    /// SPEC v2 §13.3: cumulative agent USD cost for the current UTC calendar
+    /// day. Resets at 00:00 UTC. Used for `agent.daily_budget_usd` gating.
+    pub cost_usd_today: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +96,8 @@ impl StateView {
                 output_tokens: snap.agent_totals.output_tokens,
                 total_tokens: snap.agent_totals.total_tokens,
                 seconds_running: snap.agent_totals.seconds_running,
+                cost_usd: snap.agent_totals.cost_usd,
+                cost_usd_today: snap.agent_totals.cost_usd_today,
             },
             rate_limits,
         }

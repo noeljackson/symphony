@@ -8,6 +8,7 @@
 
 pub mod actor;
 pub mod dispatch;
+pub mod pricing;
 pub mod runner;
 pub mod state;
 pub mod worker;
@@ -19,8 +20,9 @@ pub use actor::{
 pub use dispatch::{
     dispatch_eligibility, sort_for_dispatch, DispatchEligibility, EligibilityVerdict,
 };
+pub use pricing::{builtin_price_table, ModelPrice, PriceTable, TokenUsage};
 pub use runner::{RealWorker, WorkspaceManagerCleaner};
-pub use state::{CodexTotals, LiveSession, OrchestratorState, RetryEntry, RunningEntry};
+pub use state::{AgentTotals, LiveSession, OrchestratorState, RetryEntry, RunningEntry};
 pub use worker::{WorkerExit, WorkerOutcome, WorkerRunner};
 pub use workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
 
