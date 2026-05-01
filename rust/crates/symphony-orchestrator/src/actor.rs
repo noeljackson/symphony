@@ -18,7 +18,11 @@ use tokio::task::JoinHandle;
 use crate::dispatch::{
     dispatch_eligibility, retry_delay_ms, sort_for_dispatch, EligibilityVerdict,
 };
-use crate::state::{LiveSession, OrchestratorState, RetryEntry, RunningEntry};
+use crate::pricing::{builtin_price_table, PriceTable, TokenUsage as PricingTokenUsage};
+use crate::state::{
+    add_cost, budget_cap_reached as state_budget_cap_reached, roll_over_daily_cost, LiveSession,
+    OrchestratorState, RetryEntry, RunningEntry,
+};
 use crate::worker::{WorkerOutcome, WorkerRunner};
 use crate::workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
 
@@ -100,7 +104,7 @@ pub struct Snapshot {
     pub generated_at: OffsetDateTime,
     pub running: Vec<SnapshotRunningRow>,
     pub retrying: Vec<SnapshotRetryRow>,
-    pub agent_totals: crate::state::CodexTotals,
+    pub agent_totals: crate::state::AgentTotals,
 }
 
 /// SSE-friendly snapshot of one agent update plus identifying context.
@@ -202,6 +206,9 @@ pub struct Orchestrator {
     scheduled_tick: Option<JoinHandle<()>>,
     auto_schedule: bool,
     cleaner: Arc<dyn WorkspaceCleaner>,
+    /// SPEC v2 §13.5 pricing table. Populated from `builtin_price_table()` by
+    /// default; tests inject custom tables via [`Orchestrator::with_price_table`].
+    price_table: PriceTable,
 }
 
 impl Orchestrator {
@@ -231,6 +238,7 @@ impl Orchestrator {
             scheduled_tick: None,
             auto_schedule: false,
             cleaner: Arc::new(NoopCleaner),
+            price_table: builtin_price_table(),
         };
         let handle = OrchestratorHandle { cmd_tx, events_tx };
         (actor, handle)
@@ -240,6 +248,31 @@ impl Orchestrator {
     /// per-issue directory (SPEC §8.5 terminal branch).
     pub fn with_cleaner(mut self, cleaner: Arc<dyn WorkspaceCleaner>) -> Self {
         self.cleaner = cleaner;
+        self
+    }
+
+    /// SPEC v2 §13.5: override the cost-pricing table. The default
+    /// (`builtin_price_table`) is empty today because the in-tree backends
+    /// are subscription-priced. Tests and embedders can inject a custom
+    /// table to populate `agent_totals.cost_usd` from token deltas.
+    pub fn with_price_table(mut self, table: PriceTable) -> Self {
+        self.price_table = table;
+        self
+    }
+
+    /// Test seam: seed cost totals before the actor starts running. Used by
+    /// integration tests that need to exercise the budget-gate without
+    /// driving a synthetic price table through the event loop.
+    #[doc(hidden)]
+    pub fn with_seeded_cost_totals(
+        mut self,
+        cost_usd: Option<f64>,
+        cost_usd_today: Option<f64>,
+        daily_window: Option<time::Date>,
+    ) -> Self {
+        self.state.agent_totals.cost_usd = cost_usd;
+        self.state.agent_totals.cost_usd_today = cost_usd_today;
+        self.state.daily_cost_window = daily_window;
         self
     }
 
@@ -334,13 +367,21 @@ impl Orchestrator {
     }
 
     async fn run_tick(&mut self) {
-        // SPEC §16.2: reconcile -> validate preflight -> fetch -> sort ->
-        // dispatch.
+        // SPEC §16.2: reconcile -> rollover -> validate preflight -> budget
+        // gate -> fetch -> sort -> dispatch.
         self.reconcile().await;
+        self.roll_over_daily_cost_if_needed();
 
         if let Err(e) = self.cfg.validate_for_dispatch() {
             tracing::warn!(error = %e, "dispatch preflight failed");
             self.flush_refresh_replies();
+            return;
+        }
+
+        if self.budget_cap_reached() {
+            self.maybe_emit_budget_warnings();
+            self.flush_refresh_replies();
+            self.schedule_next_tick();
             return;
         }
 
@@ -361,6 +402,7 @@ impl Orchestrator {
                 break;
             }
         }
+        self.maybe_emit_budget_warnings();
         self.flush_refresh_replies();
         self.schedule_next_tick();
     }
@@ -723,6 +765,74 @@ impl Orchestrator {
                 .agent_totals
                 .total_tokens
                 .saturating_add(total_delta);
+
+            // SPEC v2 §13.5: convert the token delta to USD cost via the
+            // price table. If the table can't price the model, leave
+            // `cost_usd` / `cost_usd_today` untouched (None propagates).
+            let model = entry.session.model.clone();
+            let backend = self.cfg.agent.backend.as_str().to_string();
+            if let Some(delta_usd) = self.price_table.cost_for(
+                &backend,
+                model.as_deref(),
+                PricingTokenUsage {
+                    input_tokens: in_delta,
+                    output_tokens: out_delta,
+                },
+            ) {
+                self.add_cost_delta(delta_usd);
+            }
+        }
+    }
+
+    fn add_cost_delta(&mut self, delta_usd: f64) {
+        let today = OffsetDateTime::now_utc().date();
+        add_cost(&mut self.state, delta_usd, today);
+    }
+
+    fn roll_over_daily_cost_if_needed(&mut self) {
+        let today = OffsetDateTime::now_utc().date();
+        roll_over_daily_cost(&mut self.state, today);
+    }
+
+    fn budget_cap_reached(&self) -> bool {
+        state_budget_cap_reached(&self.state, self.cfg.agent.daily_budget_usd)
+    }
+
+    /// SPEC v2 §13.5: emit one warning per UTC day at 80% and at 100% of
+    /// the cap. Suppression state lives in `last_budget_warning_pct`.
+    fn maybe_emit_budget_warnings(&mut self) {
+        let cap = match self.cfg.agent.daily_budget_usd {
+            Some(c) => c,
+            None => return,
+        };
+        let today = self.state.agent_totals.cost_usd_today;
+        match today {
+            None => {
+                // SPEC §13.5: cap is inert when cost is unknown. One-shot
+                // warning per day to surface the misconfiguration.
+                if self.state.last_budget_warning_pct.is_none() {
+                    tracing::warn!(
+                        cap_usd = cap,
+                        "daily_budget_usd is set but the configured backend has no price-table entry; budget cap is inert"
+                    );
+                    self.state.last_budget_warning_pct = Some(0);
+                }
+            }
+            Some(used) => {
+                let pct = ((used / cap) * 100.0).floor() as u32;
+                let already = self.state.last_budget_warning_pct.unwrap_or(0);
+                if pct >= 100 && already < 100 {
+                    tracing::warn!(
+                        cap_usd = cap,
+                        used_usd = used,
+                        "daily_budget_usd reached; new dispatches will be blocked until 00:00 UTC"
+                    );
+                    self.state.last_budget_warning_pct = Some(100);
+                } else if pct >= 80 && already < 80 {
+                    tracing::warn!(cap_usd = cap, used_usd = used, "daily_budget_usd at 80%");
+                    self.state.last_budget_warning_pct = Some(80);
+                }
+            }
         }
     }
 
