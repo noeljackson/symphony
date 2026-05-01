@@ -34,5 +34,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mix-
 
-      - name: Verify make all
-        run: make all
+      - name: mix setup
+        run: make setup
+
+      - name: mix build
+        run: make build
+
+      - name: mix format --check-formatted
+        run: make fmt-check
+
+      - name: mix lint (specs.check + credo --strict)
+        run: make lint
+
+      - name: mix test --cover
+        run: make coverage
+
+      - name: mix dialyzer
+        run: make dialyzer
