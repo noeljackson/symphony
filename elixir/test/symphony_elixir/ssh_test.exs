@@ -15,8 +15,7 @@ defmodule SymphonyElixir.SSHTest do
 
     install_fake_ssh!(test_root, trace_file)
 
-    assert {:ok, {"", 0}} =
-             SSH.run("root@[::1]:2200", "printf ok", stderr_to_stdout: true)
+    assert {:ok, {"", 0}} = SSH.run("root@[::1]:2200", "printf ok", stderr_to_stdout: true)
 
     trace = File.read!(trace_file)
     assert trace =~ "-T -p 2200 root@[::1] bash -lc"
@@ -35,8 +34,7 @@ defmodule SymphonyElixir.SSHTest do
 
     install_fake_ssh!(test_root, trace_file)
 
-    assert {:ok, {"", 0}} =
-             SSH.run("::1:2200", "printf ok", stderr_to_stdout: true)
+    assert {:ok, {"", 0}} = SSH.run("::1:2200", "printf ok", stderr_to_stdout: true)
 
     trace = File.read!(trace_file)
     assert trace =~ "-T ::1:2200 bash -lc"
@@ -58,8 +56,7 @@ defmodule SymphonyElixir.SSHTest do
     install_fake_ssh!(test_root, trace_file)
     System.put_env("SYMPHONY_SSH_CONFIG", "/tmp/symphony-test-ssh-config")
 
-    assert {:ok, {"", 0}} =
-             SSH.run("localhost:2222", "echo ready", stderr_to_stdout: true)
+    assert {:ok, {"", 0}} = SSH.run("localhost:2222", "echo ready", stderr_to_stdout: true)
 
     trace = File.read!(trace_file)
     assert trace =~ "-F /tmp/symphony-test-ssh-config"
@@ -79,8 +76,7 @@ defmodule SymphonyElixir.SSHTest do
 
     install_fake_ssh!(test_root, trace_file)
 
-    assert {:ok, {"", 0}} =
-             SSH.run("root@127.0.0.1:2200", "printf ok", stderr_to_stdout: true)
+    assert {:ok, {"", 0}} = SSH.run("root@127.0.0.1:2200", "printf ok", stderr_to_stdout: true)
 
     trace = File.read!(trace_file)
     assert trace =~ "-T -p 2200 root@127.0.0.1 bash -lc"

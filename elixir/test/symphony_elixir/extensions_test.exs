@@ -144,8 +144,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     Workflow.set_workflow_file_path(missing_path)
 
-    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
-             WorkflowStore.force_reload()
+    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.force_reload()
 
     write_workflow_file!(manual_path, prompt: "Manual workflow prompt")
     Workflow.set_workflow_file_path(manual_path)
@@ -231,8 +230,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok, %{"data" => %{"commentCreate" => %{"success" => false}}}}
     )
 
-    assert {:error, :comment_create_failed} =
-             Adapter.create_comment("issue-1", "broken")
+    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "broken")
 
     Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
 
@@ -278,8 +276,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert {:error, :issue_update_failed} =
-             Adapter.update_issue_state("issue-1", "Broken")
+    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Broken")
 
     Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
 
@@ -412,8 +409,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
 
-    assert %{"status" => "retrying", "retry" => %{"attempt" => 2, "error" => "boom"}} =
-             json_response(conn, 200)
+    assert %{"status" => "retrying", "retry" => %{"attempt" => 2, "error" => "boom"}} = json_response(conn, 200)
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
 
@@ -423,8 +419,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     conn = post(build_conn(), "/api/v1/refresh", %{})
 
-    assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} =
-             json_response(conn, 202)
+    assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} = json_response(conn, 202)
   end
 
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
@@ -514,8 +509,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     phoenix_js = response(get(build_conn(), "/vendor/phoenix/phoenix.js"), 200)
     assert phoenix_js =~ "var Phoenix = (() => {"
 
-    live_view_js =
-      response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
+    live_view_js = response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
 
     assert live_view_js =~ "var LiveView = (() => {"
   end
