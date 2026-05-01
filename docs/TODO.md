@@ -68,7 +68,7 @@ should land before broader feature work; the rest are pull-as-needed.
   - Per-process / per-project / per-tracker scope explicitly documented in the implementation
   - Tests: unit test for cost extraction across each backend's usage payload, plus a budget-cap integration test
 
-- [ ] **WORKFLOW.md JSON Schema** — SPEC §18.2
+- [x] **WORKFLOW.md JSON Schema** — SPEC §18.2 (PR #13)
   - Published JSON Schema for the §5.3 front-matter schema
   - Exposed as `docs/workflow.schema.json` so editors (VS Code, Zed) can fetch it
   - Tests: schema-validation test against every fixture WORKFLOW.md in the repo
