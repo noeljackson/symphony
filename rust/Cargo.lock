@@ -1845,6 +1845,7 @@ dependencies = [
  "symphony-core",
  "symphony-orchestrator",
  "symphony-tracker",
+ "tempfile",
  "thiserror 1.0.69",
  "time",
  "tokio",

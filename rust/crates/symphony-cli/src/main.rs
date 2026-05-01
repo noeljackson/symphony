@@ -225,10 +225,13 @@ async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
     });
 
     // Boot the optional HTTP server. SPEC §13.7: bind loopback by default.
+    // Also passes the workspace root so the §13.7.3 workspace browser can
+    // serve directory listings + file fetches.
     let http_handle = match port_override.or(cfg.server.port) {
         Some(port) => {
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            match symphony_http::serve(addr, handle.clone()).await {
+            let workspace_root = cfg.workspace.root.clone();
+            match symphony_http::serve_with_workspace(addr, handle.clone(), workspace_root).await {
                 Ok(s) => {
                     tracing::info!(addr = %s.local_addr, "http server listening");
                     Some(s)
