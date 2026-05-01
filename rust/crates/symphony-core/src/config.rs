@@ -110,6 +110,19 @@ pub struct CodexConfig {
     pub stall_timeout_ms: i64,
 }
 
+/// SPEC v2 §5.3.6.B claude_code backend config.
+#[derive(Debug, Clone)]
+pub struct ClaudeCodeConfig {
+    pub command: String,
+    pub permission_mode: Option<String>,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    pub model: Option<String>,
+    pub turn_timeout_ms: u64,
+    pub read_timeout_ms: u64,
+    pub stall_timeout_ms: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// `Some(0)` means ephemeral.
@@ -124,6 +137,7 @@ pub struct ServiceConfig {
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
     pub codex: CodexConfig,
+    pub claude_code: ClaudeCodeConfig,
     pub server: ServerConfig,
     /// Original front-matter map for forward-compatibility / extensions.
     pub raw: Mapping,
@@ -146,6 +160,7 @@ impl ServiceConfig {
         let hooks = parse_hooks(get_map(&raw, "hooks"))?;
         let agent = parse_agent(get_map(&raw, "agent"))?;
         let codex = parse_codex(get_map(&raw, "codex"))?;
+        let claude_code = parse_claude_code(get_map(&raw, "claude_code"))?;
         let server = parse_server(get_map(&raw, "server"))?;
 
         Ok(ServiceConfig {
@@ -155,6 +170,7 @@ impl ServiceConfig {
             hooks,
             agent,
             codex,
+            claude_code,
             server,
             raw,
             workflow_path: def.path.clone(),
@@ -188,9 +204,12 @@ impl ServiceConfig {
                     return Err(ConfigError::EmptyCodexCommand);
                 }
             }
-            AgentBackend::ClaudeCode
-            | AgentBackend::OpenAiCompat
-            | AgentBackend::AnthropicMessages => {
+            AgentBackend::ClaudeCode => {
+                if self.claude_code.command.trim().is_empty() {
+                    return Err(ConfigError::EmptyClaudeCodeCommand);
+                }
+            }
+            AgentBackend::OpenAiCompat | AgentBackend::AnthropicMessages => {
                 return Err(ConfigError::UnimplementedAgentBackend(
                     self.agent.backend.as_str().to_string(),
                 ));
@@ -382,6 +401,46 @@ fn parse_codex(map: Option<&Mapping>) -> Result<CodexConfig, ConfigError> {
     })
 }
 
+fn parse_claude_code(map: Option<&Mapping>) -> Result<ClaudeCodeConfig, ConfigError> {
+    let m = empty_if_none(map);
+    let command = m
+        .get(Value::from("command"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(
+            "claude --print --output-format stream-json --input-format stream-json --verbose",
+        )
+        .to_string();
+    let permission_mode = m
+        .get(Value::from("permission_mode"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let allowed_tools = string_list(m.get(Value::from("allowed_tools"))).unwrap_or_default();
+    let disallowed_tools = string_list(m.get(Value::from("disallowed_tools"))).unwrap_or_default();
+    let model = m
+        .get(Value::from("model"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok(ClaudeCodeConfig {
+        command,
+        permission_mode,
+        allowed_tools,
+        disallowed_tools,
+        model,
+        turn_timeout_ms: m
+            .get(Value::from("turn_timeout_ms"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3_600_000),
+        read_timeout_ms: m
+            .get(Value::from("read_timeout_ms"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5_000),
+        stall_timeout_ms: m
+            .get(Value::from("stall_timeout_ms"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(300_000),
+    })
+}
+
 fn parse_server(map: Option<&Mapping>) -> Result<ServerConfig, ConfigError> {
     let port = match map.and_then(|m| m.get(Value::from("port"))) {
         Some(v) => match v.as_u64() {
@@ -510,14 +569,42 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_spec_backend_fails_preflight() {
+    fn claude_code_backend_passes_preflight() {
         std::env::set_var("SYMPHONY_TEST_KEY_BE", "k");
         let cfg = config_from(
             "agent:\n  backend: claude_code\ntracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY_BE\n  project_slug: demo",
         );
-        let err = cfg.validate_for_dispatch().unwrap_err();
-        assert!(matches!(err, ConfigError::UnimplementedAgentBackend(ref s) if s == "claude_code"));
+        cfg.validate_for_dispatch().unwrap();
+        assert_eq!(cfg.agent.backend, AgentBackend::ClaudeCode);
+        assert!(cfg
+            .claude_code
+            .command
+            .starts_with("claude --print --output-format stream-json"));
         std::env::remove_var("SYMPHONY_TEST_KEY_BE");
+    }
+
+    #[test]
+    fn unimplemented_spec_backend_fails_preflight() {
+        std::env::set_var("SYMPHONY_TEST_KEY_BE_HTTP", "k");
+        let cfg = config_from(
+            "agent:\n  backend: openai_compat\ntracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY_BE_HTTP\n  project_slug: demo",
+        );
+        let err = cfg.validate_for_dispatch().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::UnimplementedAgentBackend(ref s) if s == "openai_compat")
+        );
+        std::env::remove_var("SYMPHONY_TEST_KEY_BE_HTTP");
+    }
+
+    #[test]
+    fn empty_claude_code_command_fails_preflight() {
+        std::env::set_var("SYMPHONY_TEST_KEY_BE_CLI", "k");
+        let cfg = config_from(
+            "agent:\n  backend: claude_code\nclaude_code:\n  command: ' '\ntracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY_BE_CLI\n  project_slug: demo",
+        );
+        let err = cfg.validate_for_dispatch().unwrap_err();
+        assert!(matches!(err, ConfigError::EmptyClaudeCodeCommand));
+        std::env::remove_var("SYMPHONY_TEST_KEY_BE_CLI");
     }
 
     #[test]
