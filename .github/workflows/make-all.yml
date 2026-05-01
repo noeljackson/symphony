@@ -41,7 +41,17 @@ jobs:
         run: make build
 
       - name: mix format --check-formatted
-        run: make fmt-check
+        run: |
+          set +e
+          mix format --check-formatted
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::group::Diff produced by Elixir 1.19's mix format"
+            mix format
+            git --no-pager diff
+            echo "::endgroup::"
+            exit $rc
+          fi
 
       - name: mix lint (specs.check + credo --strict)
         run: make lint
