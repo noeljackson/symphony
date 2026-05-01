@@ -22,16 +22,16 @@ should land before broader feature work; the rest are pull-as-needed.
 
 ### P1 — first-run friction
 
-- [ ] **`symphony doctor` first-run CLI** — SPEC §18.2
+- [x] **`symphony doctor` first-run CLI** — SPEC §18.2 (PR #11)
   - Runs `validate_for_dispatch()` plus environment checks
   - Checklist items (each pass/fail with one-line explanation):
     - Workflow file loadable + parses
-    - Tracker auth reachable (`fetch_candidate_issues` smoke against `tracker.endpoint`)
-    - Agent backend prerequisite present (`codex` or `claude` on PATH for stdio backends; `api_key` set + endpoint reachable for HTTP backends)
+    - Tracker auth reachable (`fetch_candidate_issues` smoke against `tracker.endpoint`, 10s timeout)
+    - Agent backend prerequisite present (`codex` or `claude` on PATH for stdio backends; HTTP backends rejected as TBD until those crates land)
     - Workspace root writable
     - Hook scripts parse (`bash -n`)
   - Exit `0` on full green, `1` on any failure
-  - Tests: smoke test that runs against a known-bad workflow and asserts the failing checks report
+  - Tests: 4 unit tests in `doctor::tests` + 2 binary smoke tests in `cli_smoke.rs`
 
 ### P1 — operator control surface
 

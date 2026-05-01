@@ -1,11 +1,13 @@
-//! `symphony` binary. SPEC §17.7.
+//! `symphony` binary. SPEC §17.7 + §18.2 (`symphony doctor`).
+
+mod doctor;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use symphony_codex::tools::ToolExecutor;
 use symphony_core::config::TrackerKind;
 use symphony_core::prompt::PromptBuilder;
@@ -26,13 +28,26 @@ use symphony_workspace::WorkspaceManager;
 )]
 struct Cli {
     /// Path to `WORKFLOW.md`. Defaults to `./WORKFLOW.md` in the current
-    /// working directory.
+    /// working directory. Used by both the daemon and `symphony doctor`.
     workflow_path: Option<PathBuf>,
 
     /// Optional HTTP server port. Overrides `server.port` in the workflow.
-    /// `0` requests an ephemeral port.
+    /// `0` requests an ephemeral port. Daemon mode only.
     #[arg(long)]
     port: Option<u16>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Run preflight + environment checks against the workflow and print a
+    /// pass/fail checklist. Exit `0` on full green, `1` on any failure.
+    Doctor {
+        /// Path to `WORKFLOW.md`. Defaults to `./WORKFLOW.md`.
+        workflow_path: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -44,13 +59,6 @@ fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
-    let path = cli
-        .workflow_path
-        .unwrap_or_else(|| PathBuf::from("./WORKFLOW.md"));
-    if !path.exists() {
-        eprintln!("symphony: workflow file not found: {}", path.display());
-        return ExitCode::from(2);
-    }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -63,7 +71,36 @@ fn main() -> ExitCode {
         }
     };
 
-    runtime.block_on(async move { run(path, cli.port).await })
+    match cli.command {
+        Some(Command::Doctor { workflow_path }) => {
+            let path = workflow_path
+                .or(cli.workflow_path)
+                .unwrap_or_else(|| PathBuf::from("./WORKFLOW.md"));
+            runtime.block_on(async move { run_doctor(&path).await })
+        }
+        None => {
+            let path = cli
+                .workflow_path
+                .unwrap_or_else(|| PathBuf::from("./WORKFLOW.md"));
+            if !path.exists() {
+                eprintln!("symphony: workflow file not found: {}", path.display());
+                return ExitCode::from(2);
+            }
+            runtime.block_on(async move { run(path, cli.port).await })
+        }
+    }
+}
+
+async fn run_doctor(path: &std::path::Path) -> ExitCode {
+    let mut stdout = std::io::stdout();
+    match doctor::run(path, &mut stdout).await {
+        Ok(0) => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("symphony doctor: io error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
