@@ -17,7 +17,10 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn success(output: Value) -> Self {
-        Self { success: true, output }
+        Self {
+            success: true,
+            output,
+        }
     }
 
     pub fn failure(message: impl Into<String>) -> Self {

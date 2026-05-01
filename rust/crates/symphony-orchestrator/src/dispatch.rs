@@ -12,7 +12,7 @@ use crate::state::OrchestratorState;
 /// SPEC §8.2 sort order: priority ascending (null last), created_at oldest
 /// first, identifier lexicographic tiebreak.
 pub fn sort_for_dispatch(issues: &mut [Issue]) {
-    issues.sort_by(|a, b| dispatch_key(a).cmp(&dispatch_key(b)));
+    issues.sort_by_key(dispatch_key);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +39,9 @@ pub fn dispatch_eligibility(
     cfg: &ServiceConfig,
     state: &OrchestratorState,
 ) -> DispatchEligibility {
-    if issue.id.is_empty() || issue.identifier.is_empty() || issue.title.is_empty()
+    if issue.id.is_empty()
+        || issue.identifier.is_empty()
+        || issue.title.is_empty()
         || issue.state.is_empty()
     {
         return DispatchEligibility {
@@ -173,7 +175,9 @@ mod tests {
                 active_states: vec!["Todo".into(), "In Progress".into()],
                 terminal_states: vec!["Done".into(), "Cancelled".into()],
             },
-            polling: PollingConfig { interval_ms: 30_000 },
+            polling: PollingConfig {
+                interval_ms: 30_000,
+            },
             workspace: WorkspaceConfig {
                 root: PathBuf::from("/tmp/symphony"),
             },
@@ -228,14 +232,41 @@ mod tests {
     #[test]
     fn sorts_by_priority_then_created_then_identifier() {
         let mut issues = vec![
-            issue("c", "MT-3", None, "Todo", Some(datetime!(2026-01-01 00:00 UTC))),
-            issue("a", "MT-1", Some(2), "Todo", Some(datetime!(2026-01-02 00:00 UTC))),
-            issue("b", "MT-2", Some(2), "Todo", Some(datetime!(2026-01-01 00:00 UTC))),
-            issue("d", "MT-4", Some(1), "Todo", Some(datetime!(2026-01-03 00:00 UTC))),
+            issue(
+                "c",
+                "MT-3",
+                None,
+                "Todo",
+                Some(datetime!(2026-01-01 00:00 UTC)),
+            ),
+            issue(
+                "a",
+                "MT-1",
+                Some(2),
+                "Todo",
+                Some(datetime!(2026-01-02 00:00 UTC)),
+            ),
+            issue(
+                "b",
+                "MT-2",
+                Some(2),
+                "Todo",
+                Some(datetime!(2026-01-01 00:00 UTC)),
+            ),
+            issue(
+                "d",
+                "MT-4",
+                Some(1),
+                "Todo",
+                Some(datetime!(2026-01-03 00:00 UTC)),
+            ),
         ];
         sort_for_dispatch(&mut issues);
         assert_eq!(
-            issues.iter().map(|i| i.identifier.clone()).collect::<Vec<_>>(),
+            issues
+                .iter()
+                .map(|i| i.identifier.clone())
+                .collect::<Vec<_>>(),
             vec!["MT-4", "MT-2", "MT-1", "MT-3"]
         );
     }

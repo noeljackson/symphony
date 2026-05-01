@@ -55,7 +55,7 @@ impl WorkflowWatcher {
                 }
             },
         )
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // Watch the parent directory non-recursively so we still get events
         // even if the file is replaced atomically (rename-into-place).
@@ -66,7 +66,7 @@ impl WorkflowWatcher {
         debouncer
             .watcher()
             .watch(&parent, RecursiveMode::NonRecursive)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         Ok(WorkflowWatcher {
             events: rx,
