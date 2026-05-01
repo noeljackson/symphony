@@ -26,3 +26,4 @@ dirs.workspace = true
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["full"] }
+jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }

@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/noeljackson/symphony/blob/main/docs/workflow.schema.json",
+  "title": "Symphony WORKFLOW.md front matter",
+  "description": "JSON Schema for the YAML front matter of WORKFLOW.md, per SPEC v2 §5.3. Editors (VS Code, Zed) can use this for autocomplete and inline diagnostics. The Markdown body following the front matter is the Liquid prompt template and is out of scope for this schema.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "tracker": { "$ref": "#/$defs/tracker" },
+    "polling": { "$ref": "#/$defs/polling" },
+    "workspace": { "$ref": "#/$defs/workspace" },
+    "hooks": { "$ref": "#/$defs/hooks" },
+    "agent": { "$ref": "#/$defs/agent" },
+    "codex": { "$ref": "#/$defs/codex" },
+    "claude_code": { "$ref": "#/$defs/claude_code" },
+    "openai_compat": { "$ref": "#/$defs/openai_compat" },
+    "anthropic_messages": { "$ref": "#/$defs/anthropic_messages" },
+    "server": { "$ref": "#/$defs/server" }
+  },
+  "$defs": {
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["linear"],
+          "description": "Tracker adapter selector. Currently only `linear` is supported."
+        },
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "GraphQL endpoint. Default: https://api.linear.app/graphql"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "API token, or `$VAR_NAME` to read from the environment. Canonical env var for Linear: LINEAR_API_KEY."
+        },
+        "project_slug": {
+          "type": "string",
+          "description": "Linear project slugId. Required for `tracker.kind == \"linear\"`."
+        },
+        "active_states": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["Todo", "In Progress"]
+        },
+        "terminal_states": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+        }
+      }
+    },
+    "polling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30000,
+          "description": "Poll cadence in milliseconds. Re-applied at runtime on workflow reload."
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Absolute path or `$VAR` / `~`-prefixed path. Relative paths resolve against the directory containing WORKFLOW.md. Default: <system-temp>/symphony_workspaces."
+        }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after_create": { "type": "string", "description": "Multiline shell script. Runs only when a workspace directory is newly created. Failure aborts workspace creation." },
+        "before_run": { "type": "string", "description": "Multiline shell script. Runs before each agent attempt. Failure aborts the current attempt." },
+        "after_run": { "type": "string", "description": "Multiline shell script. Runs after each agent attempt. Failure is logged and ignored." },
+        "before_remove": { "type": "string", "description": "Multiline shell script. Runs before workspace deletion. Failure is logged and ignored; cleanup still proceeds." },
+        "timeout_ms": { "type": "integer", "minimum": 1, "default": 60000, "description": "Hook timeout in milliseconds. Applies to all hooks." }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["codex", "claude_code", "openai_compat", "anthropic_messages"],
+          "description": "Which agent runner to dispatch through. SPEC v2 §10."
+        },
+        "max_concurrent_agents": { "type": "integer", "minimum": 1, "default": 10 },
+        "max_turns": { "type": "integer", "minimum": 1, "default": 20 },
+        "max_retry_backoff_ms": { "type": "integer", "minimum": 1, "default": 300000 },
+        "max_concurrent_agents_by_state": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 1 },
+          "default": {},
+          "description": "Per-state concurrency override. Keys are tracker state names (case-insensitive)."
+        }
+      },
+      "required": ["backend"]
+    },
+    "codex": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "default": "codex app-server",
+          "description": "Shell command launched via `bash -lc` in the workspace directory. Must speak the Codex app-server protocol over stdio."
+        },
+        "approval_policy": {
+          "description": "Codex `AskForApproval` value. Pass-through; supported values are defined by the targeted Codex version."
+        },
+        "thread_sandbox": {
+          "description": "Codex `SandboxMode` value. Pass-through."
+        },
+        "turn_sandbox_policy": {
+          "description": "Codex `SandboxPolicy` value. Pass-through."
+        },
+        "turn_timeout_ms": { "type": "integer", "minimum": 1, "default": 3600000 },
+        "read_timeout_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+        "stall_timeout_ms": { "type": "integer", "default": 300000, "description": "If <= 0, stall detection is disabled." }
+      }
+    },
+    "claude_code": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "default": "claude --print --output-format stream-json --input-format stream-json --verbose"
+        },
+        "permission_mode": {
+          "type": "string",
+          "enum": ["default", "plan", "acceptEdits", "bypassPermissions"]
+        },
+        "allowed_tools": { "type": "array", "items": { "type": "string" } },
+        "disallowed_tools": { "type": "array", "items": { "type": "string" } },
+        "model": { "type": "string" },
+        "turn_timeout_ms": { "type": "integer", "minimum": 1, "default": 3600000 },
+        "read_timeout_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+        "stall_timeout_ms": { "type": "integer", "default": 300000 }
+      }
+    },
+    "openai_compat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "description": "Base URL of an OpenAI-compatible chat-completions endpoint (OpenAI, Moonshot Kimi, Zhipu GLM, DeepSeek, vLLM, llama.cpp)."
+        },
+        "api_key": { "type": "string" },
+        "model": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 1 },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "extra_request_fields": {
+          "type": "object",
+          "description": "Top-level fields merged into every chat-completions request body."
+        },
+        "turn_timeout_ms": { "type": "integer", "minimum": 1, "default": 3600000 },
+        "read_timeout_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+        "stall_timeout_ms": { "type": "integer", "default": 300000 }
+      },
+      "required": ["endpoint", "api_key", "model"]
+    },
+    "anthropic_messages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://api.anthropic.com/v1"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Anthropic API key. Canonical env var: ANTHROPIC_API_KEY."
+        },
+        "model": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 1, "default": 8192 },
+        "system": { "type": "string", "description": "System prompt prepended to every turn." },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "turn_timeout_ms": { "type": "integer", "minimum": 1, "default": 3600000 },
+        "read_timeout_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+        "stall_timeout_ms": { "type": "integer", "default": 300000 }
+      },
+      "required": ["api_key", "model"]
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "0 requests an ephemeral port. CLI --port overrides this. Default bind host is loopback (127.0.0.1)."
+        }
+      }
+    }
+  }
+}
