@@ -58,6 +58,7 @@ fn cfg() -> Arc<ServiceConfig> {
             ..Default::default()
         },
         agent: AgentConfig {
+            backend: symphony_core::config::AgentBackend::Codex,
             max_concurrent_agents: 4,
             max_turns: 1,
             max_retry_backoff_ms: 300_000,
@@ -139,7 +140,7 @@ async fn state_endpoint_returns_running_and_totals_after_dispatch() {
     assert_eq!(body["counts"]["running"], 1);
     assert_eq!(body["counts"]["retrying"], 0);
     assert_eq!(body["running"][0]["issue_identifier"], "MT-1");
-    assert!(body["codex_totals"].is_object());
+    assert!(body["agent_totals"].is_object());
 
     server.shutdown().await;
 }

@@ -53,8 +53,45 @@ pub struct HooksConfig {
     pub timeout_ms: u64,
 }
 
+/// SPEC v2 §5.3.5 agent backend selector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentBackend {
+    Codex,
+    ClaudeCode,
+    OpenAiCompat,
+    AnthropicMessages,
+    Other(String),
+}
+
+impl AgentBackend {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim() {
+            "codex" => Self::Codex,
+            "claude_code" => Self::ClaudeCode,
+            "openai_compat" => Self::OpenAiCompat,
+            "anthropic_messages" => Self::AnthropicMessages,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude_code",
+            Self::OpenAiCompat => "openai_compat",
+            Self::AnthropicMessages => "anthropic_messages",
+            Self::Other(s) => s.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
+    /// SPEC v2 §5.3.5: REQUIRED selector. This Rust reference currently only
+    /// implements the `codex` backend; `claude_code`, `openai_compat`, and
+    /// `anthropic_messages` are accepted by the parser but rejected by
+    /// dispatch preflight until their backend crates land.
+    pub backend: AgentBackend,
     pub max_concurrent_agents: usize,
     pub max_turns: u32,
     pub max_retry_backoff_ms: u64,
@@ -145,8 +182,22 @@ impl ServiceConfig {
                 return Err(ConfigError::UnsupportedTrackerKind(kind.clone()));
             }
         }
-        if self.codex.command.trim().is_empty() {
-            return Err(ConfigError::EmptyCodexCommand);
+        match &self.agent.backend {
+            AgentBackend::Codex => {
+                if self.codex.command.trim().is_empty() {
+                    return Err(ConfigError::EmptyCodexCommand);
+                }
+            }
+            AgentBackend::ClaudeCode
+            | AgentBackend::OpenAiCompat
+            | AgentBackend::AnthropicMessages => {
+                return Err(ConfigError::UnimplementedAgentBackend(
+                    self.agent.backend.as_str().to_string(),
+                ));
+            }
+            AgentBackend::Other(name) => {
+                return Err(ConfigError::UnsupportedAgentBackend(name.clone()));
+            }
         }
         Ok(())
     }
@@ -253,6 +304,11 @@ fn parse_hooks(map: Option<&Mapping>) -> Result<HooksConfig, ConfigError> {
 
 fn parse_agent(map: Option<&Mapping>) -> Result<AgentConfig, ConfigError> {
     let m = empty_if_none(map);
+    let backend = m
+        .get(Value::from("backend"))
+        .and_then(|v| v.as_str())
+        .map(AgentBackend::parse)
+        .unwrap_or(AgentBackend::Codex);
     let max_concurrent_agents = m
         .get(Value::from("max_concurrent_agents"))
         .and_then(|v| v.as_u64())
@@ -291,6 +347,7 @@ fn parse_agent(map: Option<&Mapping>) -> Result<AgentConfig, ConfigError> {
     }
 
     Ok(AgentConfig {
+        backend,
         max_concurrent_agents,
         max_turns,
         max_retry_backoff_ms,
@@ -435,8 +492,43 @@ mod tests {
         assert_eq!(cfg.tracker.active_states, vec!["Todo", "In Progress"]);
         assert_eq!(cfg.agent.max_concurrent_agents, 10);
         assert_eq!(cfg.agent.max_turns, 20);
+        assert_eq!(cfg.agent.backend, AgentBackend::Codex);
         assert_eq!(cfg.codex.command, "codex app-server");
         assert_eq!(cfg.hooks.timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn parses_agent_backend_selector() {
+        let cfg = config_from("agent:\n  backend: claude_code");
+        assert_eq!(cfg.agent.backend, AgentBackend::ClaudeCode);
+        let cfg = config_from("agent:\n  backend: openai_compat");
+        assert_eq!(cfg.agent.backend, AgentBackend::OpenAiCompat);
+        let cfg = config_from("agent:\n  backend: anthropic_messages");
+        assert_eq!(cfg.agent.backend, AgentBackend::AnthropicMessages);
+        let cfg = config_from("agent:\n  backend: gibberish");
+        assert!(matches!(cfg.agent.backend, AgentBackend::Other(ref s) if s == "gibberish"));
+    }
+
+    #[test]
+    fn unimplemented_spec_backend_fails_preflight() {
+        std::env::set_var("SYMPHONY_TEST_KEY_BE", "k");
+        let cfg = config_from(
+            "agent:\n  backend: claude_code\ntracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY_BE\n  project_slug: demo",
+        );
+        let err = cfg.validate_for_dispatch().unwrap_err();
+        assert!(matches!(err, ConfigError::UnimplementedAgentBackend(ref s) if s == "claude_code"));
+        std::env::remove_var("SYMPHONY_TEST_KEY_BE");
+    }
+
+    #[test]
+    fn unknown_backend_value_fails_preflight() {
+        std::env::set_var("SYMPHONY_TEST_KEY_BE2", "k");
+        let cfg = config_from(
+            "agent:\n  backend: jiraagent\ntracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY_BE2\n  project_slug: demo",
+        );
+        let err = cfg.validate_for_dispatch().unwrap_err();
+        assert!(matches!(err, ConfigError::UnsupportedAgentBackend(ref s) if s == "jiraagent"));
+        std::env::remove_var("SYMPHONY_TEST_KEY_BE2");
     }
 
     #[test]

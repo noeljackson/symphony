@@ -12,7 +12,7 @@ pub struct StateView {
     pub counts: Counts,
     pub running: Vec<RunningRowView>,
     pub retrying: Vec<RetryRowView>,
-    pub codex_totals: TotalsView,
+    pub agent_totals: TotalsView,
     pub rate_limits: Option<Value>,
 }
 
@@ -85,11 +85,11 @@ impl StateView {
             },
             running: snap.running.iter().map(running_row).collect(),
             retrying: snap.retrying.iter().map(retry_row).collect(),
-            codex_totals: TotalsView {
-                input_tokens: snap.codex_totals.input_tokens,
-                output_tokens: snap.codex_totals.output_tokens,
-                total_tokens: snap.codex_totals.total_tokens,
-                seconds_running: snap.codex_totals.seconds_running,
+            agent_totals: TotalsView {
+                input_tokens: snap.agent_totals.input_tokens,
+                output_tokens: snap.agent_totals.output_tokens,
+                total_tokens: snap.agent_totals.total_tokens,
+                seconds_running: snap.agent_totals.seconds_running,
             },
             rate_limits,
         }
