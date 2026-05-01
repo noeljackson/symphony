@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod linear;
+pub mod memory;
 pub mod tracker;
 
 pub use errors::TrackerError;
