@@ -1,0 +1,27 @@
+[package]
+name = "symphony-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "net"] }
+tracing.workspace = true
+axum.workspace = true
+time.workspace = true
+symphony-core.workspace = true
+symphony-orchestrator.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+serde_yaml = { workspace = true }
+symphony-codex = { workspace = true }
+symphony-tracker = { workspace = true }
+symphony-orchestrator = { workspace = true }
