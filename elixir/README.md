@@ -1,7 +1,15 @@
 # Symphony Elixir
 
-This directory contains the current Elixir/OTP implementation of Symphony, based on
+This directory contains the original Elixir/OTP implementation of Symphony, based on
 [`SPEC.md`](../SPEC.md) at the repository root.
+
+> [!NOTE]
+> SPEC v2 introduces a multi-backend agent runner architecture
+> (`agent.backend` selector, with support for Codex, Claude Code,
+> OpenAI-compatible HTTP endpoints, and the Anthropic Messages API). This
+> Elixir reference is currently single-backend and only implements the
+> `codex` runner. The [Rust reference](../rust/README.md) is being built
+> out against SPEC v2 directly.
 
 > [!WARNING]
 > Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
