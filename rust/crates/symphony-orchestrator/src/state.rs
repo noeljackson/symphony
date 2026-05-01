@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use symphony_core::Issue;
+use time::OffsetDateTime;
 
 /// SPEC §4.1.6 live session metadata.
 #[derive(Debug, Clone, Default)]
@@ -12,6 +13,9 @@ pub struct LiveSession {
     pub codex_app_server_pid: Option<String>,
     pub last_codex_event: Option<String>,
     pub last_codex_message: Option<String>,
+    pub last_codex_timestamp: Option<OffsetDateTime>,
+    /// Monotonic timestamp used by stall detection; not exposed publicly.
+    pub last_codex_timestamp_monotonic: Option<Instant>,
     pub codex_input_tokens: u64,
     pub codex_output_tokens: u64,
     pub codex_total_tokens: u64,
@@ -28,7 +32,7 @@ pub struct RunningEntry {
     pub issue: Issue,
     pub session: LiveSession,
     pub retry_attempt: Option<u32>,
-    pub started_at: time::OffsetDateTime,
+    pub started_at: OffsetDateTime,
     pub started_monotonic: Instant,
 }
 
