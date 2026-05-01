@@ -1,8 +1,20 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::time::Instant;
 
 use symphony_core::Issue;
 use time::{Date, OffsetDateTime};
+
+/// SPEC v2 §13.7.2: ring-buffer cap for `recent_events`. Operators see the
+/// most recent agent activity at this depth; older events are dropped.
+pub const RECENT_EVENTS_CAP: usize = 50;
+
+/// SPEC v2 §13.7.2: one entry in the per-issue `recent_events` ring buffer.
+#[derive(Debug, Clone)]
+pub struct RecentEvent {
+    pub at: OffsetDateTime,
+    pub event: String,
+    pub message: Option<String>,
+}
 
 /// SPEC §4.1.6 live session metadata.
 #[derive(Debug, Clone, Default)]
@@ -28,6 +40,10 @@ pub struct LiveSession {
     /// that don't expose the model name on their event stream (today: codex,
     /// claude_code).
     pub model: Option<String>,
+    /// SPEC v2 §13.7.2: ring buffer of recent agent events for this session.
+    /// Capped at [`RECENT_EVENTS_CAP`]; oldest entries are dropped first.
+    /// Cleared on session restart (see RunningEntry construction).
+    pub recent_events: VecDeque<RecentEvent>,
 }
 
 /// SPEC §16.4 running entry.
@@ -128,6 +144,15 @@ pub fn budget_cap_reached(state: &OrchestratorState, daily_budget_usd: Option<f6
     }
 }
 
+/// SPEC v2 §13.7.2: append `entry` to a ring buffer capped at
+/// [`RECENT_EVENTS_CAP`], dropping the oldest entry when full.
+pub fn push_recent_event(buf: &mut VecDeque<RecentEvent>, entry: RecentEvent) {
+    if buf.len() == RECENT_EVENTS_CAP {
+        buf.pop_front();
+    }
+    buf.push_back(entry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +209,27 @@ mod tests {
         s.last_budget_warning_pct = Some(80);
         roll_over_daily_cost(&mut s, date!(2026 - 5 - 2));
         assert_eq!(s.last_budget_warning_pct, None);
+    }
+
+    #[test]
+    fn push_recent_event_caps_at_50_and_drops_oldest() {
+        let mut buf = VecDeque::new();
+        for i in 0..(RECENT_EVENTS_CAP + 5) {
+            push_recent_event(
+                &mut buf,
+                RecentEvent {
+                    at: time::macros::datetime!(2026-05-01 00:00 UTC),
+                    event: format!("ev-{i}"),
+                    message: None,
+                },
+            );
+        }
+        assert_eq!(buf.len(), RECENT_EVENTS_CAP);
+        // The oldest 5 should have been dropped, so the front is "ev-5".
+        assert_eq!(buf.front().unwrap().event, "ev-5");
+        assert_eq!(
+            buf.back().unwrap().event,
+            format!("ev-{}", RECENT_EVENTS_CAP + 4)
+        );
     }
 }

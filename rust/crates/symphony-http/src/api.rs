@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use symphony_orchestrator::{Snapshot, SnapshotRetryRow, SnapshotRunningRow};
+use symphony_orchestrator::{RecentEvent, Snapshot, SnapshotRetryRow, SnapshotRunningRow};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -34,6 +34,24 @@ pub struct RunningRowView {
     pub started_at: String,
     pub last_event_at: Option<String>,
     pub tokens: TokenView,
+}
+
+/// SPEC v2 §13.7.2: ring-buffer entry surfaced via `recent_events`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecentEventView {
+    pub at: String,
+    pub event: String,
+    pub message: Option<String>,
+}
+
+impl RecentEventView {
+    fn from_state(e: &RecentEvent) -> Self {
+        Self {
+            at: e.at.format(&Rfc3339).unwrap_or_default(),
+            event: e.event.clone(),
+            message: e.message.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -146,12 +164,18 @@ pub fn issue_view(snap: &Snapshot, identifier: &str) -> Option<Value> {
         .iter()
         .find(|r| r.identifier.eq_ignore_ascii_case(identifier))
     {
+        let recent: Vec<RecentEventView> = running
+            .recent_events
+            .iter()
+            .map(RecentEventView::from_state)
+            .collect();
         return Some(serde_json::json!({
             "issue_identifier": running.identifier,
             "issue_id": running.issue_id,
             "status": "running",
             "running": running_row(running),
             "retry": serde_json::Value::Null,
+            "recent_events": recent,
         }));
     }
     if let Some(retry) = snap
@@ -165,6 +189,7 @@ pub fn issue_view(snap: &Snapshot, identifier: &str) -> Option<Value> {
             "status": "retrying",
             "running": serde_json::Value::Null,
             "retry": retry_row(retry),
+            "recent_events": serde_json::Value::Array(Vec::new()),
         }));
     }
     None
