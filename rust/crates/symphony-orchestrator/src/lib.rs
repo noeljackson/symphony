@@ -20,5 +20,8 @@ pub use dispatch::{
     dispatch_eligibility, sort_for_dispatch, DispatchEligibility, EligibilityVerdict,
 };
 pub use state::{CodexTotals, LiveSession, OrchestratorState, RetryEntry, RunningEntry};
-pub use runner::RealWorker;
+pub use runner::{RealWorker, WorkspaceManagerCleaner};
 pub use worker::{WorkerExit, WorkerOutcome, WorkerRunner};
+pub use workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
+
+pub mod workspace_cleaner;

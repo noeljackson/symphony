@@ -12,7 +12,7 @@ use symphony_core::prompt::PromptBuilder;
 use symphony_core::watcher::{ReloadEvent, WorkflowWatcher};
 use symphony_core::workflow::WorkflowLoader;
 use symphony_core::ServiceConfig;
-use symphony_orchestrator::{Orchestrator, RealWorker};
+use symphony_orchestrator::{Orchestrator, RealWorker, WorkspaceCleaner, WorkspaceManagerCleaner};
 use symphony_tracker::linear::{GraphqlTransport, LinearClient, LinearConfig, ReqwestTransport};
 use symphony_tracker::linear_tool::LinearGraphqlTool;
 use symphony_tracker::Tracker;
@@ -141,8 +141,11 @@ async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
             .with_tools(tools),
     );
 
+    let cleaner: Arc<dyn WorkspaceCleaner> = Arc::new(WorkspaceManagerCleaner {
+        manager: workspace_mgr.clone(),
+    });
     let (actor, handle) = Orchestrator::new(cfg.clone(), tracker, runner);
-    let actor = actor.with_auto_schedule(true);
+    let actor = actor.with_auto_schedule(true).with_cleaner(cleaner);
     let actor_join = tokio::spawn(async move {
         let _ = actor.run().await;
     });

@@ -20,6 +20,23 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::worker::{WorkerOutcome, WorkerRunner};
+use crate::workspace_cleaner::WorkspaceCleaner;
+
+/// Bridge so [`WorkspaceManager`] can be plugged into the orchestrator as
+/// a [`WorkspaceCleaner`] without leaking the workspace crate into the
+/// actor.
+pub struct WorkspaceManagerCleaner {
+    pub manager: Arc<WorkspaceManager>,
+}
+
+#[async_trait]
+impl WorkspaceCleaner for WorkspaceManagerCleaner {
+    async fn remove(&self, identifier: &str) {
+        if let Err(e) = self.manager.remove(identifier).await {
+            tracing::warn!(identifier = %identifier, error = %e, "workspace cleanup failed");
+        }
+    }
+}
 
 fn yaml_to_json(v: &serde_yaml::Value) -> serde_json::Value {
     use serde_json::Value as J;

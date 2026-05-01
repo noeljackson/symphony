@@ -20,6 +20,7 @@ use crate::dispatch::{
 };
 use crate::state::{LiveSession, OrchestratorState, RetryEntry, RunningEntry};
 use crate::worker::{WorkerOutcome, WorkerRunner};
+use crate::workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
 
 /// Commands accepted by the orchestrator actor. Workers, retry timers, the
 /// poll loop, and HTTP triggers all funnel through this single channel.
@@ -140,6 +141,7 @@ pub struct Orchestrator {
     pending_refresh_replies: Vec<oneshot::Sender<()>>,
     scheduled_tick: Option<JoinHandle<()>>,
     auto_schedule: bool,
+    cleaner: Arc<dyn WorkspaceCleaner>,
 }
 
 impl Orchestrator {
@@ -164,9 +166,17 @@ impl Orchestrator {
             pending_refresh_replies: Vec::new(),
             scheduled_tick: None,
             auto_schedule: false,
+            cleaner: Arc::new(NoopCleaner),
         };
         let handle = OrchestratorHandle { cmd_tx };
         (actor, handle)
+    }
+
+    /// Plug in a workspace cleaner so terminal reconciliation removes the
+    /// per-issue directory (SPEC §8.5 terminal branch).
+    pub fn with_cleaner(mut self, cleaner: Arc<dyn WorkspaceCleaner>) -> Self {
+        self.cleaner = cleaner;
+        self
     }
 
     /// Enable self-scheduling: after every tick the actor schedules the next
@@ -362,9 +372,11 @@ impl Orchestrator {
             None => return,
         };
         self.update_runtime_total(&entry);
-        let _ = cleanup_workspace; // workspace cleanup is wired in Phase 6
+        if cleanup_workspace {
+            self.cleaner.remove(&entry.identifier).await;
+        }
         tracing::info!(issue_id = %issue_id, reason = %reason, "worker terminated by orchestrator");
-        // Cancellation does not auto-retry; SPEC §8.4 tracker-state-refresh
+        // Cancellation does not auto-retry; SPEC §8.5 tracker-state-refresh
         // path either drops the claim or re-queues on the next tick.
         self.state.claimed.remove(issue_id);
         self.cancel_retry_timer(issue_id);
