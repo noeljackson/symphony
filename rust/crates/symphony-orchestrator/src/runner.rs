@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use symphony_codex::{
-    CodexClient, CodexLaunch, ChildChannel, RuntimeEvent, SessionPolicies, ToolExecutor,
+    ChildChannel, CodexClient, CodexLaunch, RuntimeEvent, SessionPolicies, ToolExecutor,
     TurnRequest, UnsupportedToolExecutor,
 };
 use symphony_core::config::ServiceConfig;
@@ -147,11 +147,17 @@ impl WorkerRunner for RealWorker {
     ) -> WorkerOutcome {
         let workspace = match self.workspace_mgr.ensure_for_issue(&issue.identifier).await {
             Ok(ws) => ws,
-            Err(e) => return WorkerOutcome::Failure { error: format!("workspace: {e}") },
+            Err(e) => {
+                return WorkerOutcome::Failure {
+                    error: format!("workspace: {e}"),
+                }
+            }
         };
 
         if let Err(e) = ensure_within_root(&workspace.path, self.workspace_mgr.root()) {
-            return WorkerOutcome::Failure { error: format!("invalid_workspace_cwd: {e}") };
+            return WorkerOutcome::Failure {
+                error: format!("invalid_workspace_cwd: {e}"),
+            };
         }
 
         if let Err(e) = self
@@ -172,7 +178,9 @@ impl WorkerRunner for RealWorker {
                     &workspace.path,
                 )
                 .await;
-            return WorkerOutcome::Failure { error: format!("before_run: {e}") };
+            return WorkerOutcome::Failure {
+                error: format!("before_run: {e}"),
+            };
         }
 
         let cwd_str = workspace.path.to_string_lossy().to_string();
@@ -226,7 +234,8 @@ impl WorkerRunner for RealWorker {
             read_timeout: Duration::from_millis(self.cfg.codex.read_timeout_ms),
             turn_timeout: Duration::from_millis(self.cfg.codex.turn_timeout_ms),
         };
-        let mut client = CodexClient::new(channel, events.clone(), launch).with_tools(self.tools.clone());
+        let mut client =
+            CodexClient::new(channel, events.clone(), launch).with_tools(self.tools.clone());
 
         if let Err(e) = client.start_session(&cwd_str).await {
             client.stop_session().await;
@@ -238,7 +247,9 @@ impl WorkerRunner for RealWorker {
                     &workspace.path,
                 )
                 .await;
-            return WorkerOutcome::Failure { error: format!("startup_failed: {e}") };
+            return WorkerOutcome::Failure {
+                error: format!("startup_failed: {e}"),
+            };
         }
 
         let mut current_issue = issue.clone();
@@ -251,12 +262,18 @@ impl WorkerRunner for RealWorker {
             };
             let prompt = match self.prompt_builder.render(&current_issue, prompt_attempt) {
                 Ok(p) => p,
-                Err(e) => break WorkerOutcome::Failure { error: format!("prompt: {e}") },
+                Err(e) => {
+                    break WorkerOutcome::Failure {
+                        error: format!("prompt: {e}"),
+                    }
+                }
             };
             let title = format!("{}: {}", current_issue.identifier, current_issue.title);
             let req = TurnRequest { prompt, title };
             if let Err(e) = client.run_turn(req, &cwd_str).await {
-                break WorkerOutcome::Failure { error: format!("turn_failed: {e}") };
+                break WorkerOutcome::Failure {
+                    error: format!("turn_failed: {e}"),
+                };
             }
 
             // SPEC §16.5: re-check tracker state to decide whether to start

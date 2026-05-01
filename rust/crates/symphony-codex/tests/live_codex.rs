@@ -97,7 +97,11 @@ async fn live_codex_handshake_smoke() {
 #[tokio::test]
 #[ignore = "real codex turn; run with --ignored AND SYMPHONY_E2E_REAL_CODEX_FULL=1"]
 async fn live_codex_turn_smoke() {
-    if std::env::var("SYMPHONY_E2E_REAL_CODEX_FULL").ok().as_deref() != Some("1") {
+    if std::env::var("SYMPHONY_E2E_REAL_CODEX_FULL")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
         panic!(
             "set SYMPHONY_E2E_REAL_CODEX_FULL=1 to opt into the live turn smoke; \
              this test makes a real LLM call against codex"
@@ -145,8 +149,7 @@ async fn live_codex_turn_smoke() {
     assert!(!summary.session_id.is_empty());
 
     let mut events = Vec::new();
-    while let Ok(Some(ev)) =
-        tokio::time::timeout(Duration::from_millis(50), events_rx.recv()).await
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(50), events_rx.recv()).await
     {
         events.push(ev.event);
     }

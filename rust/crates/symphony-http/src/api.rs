@@ -116,10 +116,9 @@ fn running_row(r: &SnapshotRunningRow) -> RunningRowView {
 }
 
 fn retry_row(r: &SnapshotRetryRow) -> RetryRowView {
-    let due_at = (OffsetDateTime::now_utc()
-        + time::Duration::milliseconds(r.due_in_ms.max(0)))
-    .format(&Rfc3339)
-    .unwrap_or_default();
+    let due_at = (OffsetDateTime::now_utc() + time::Duration::milliseconds(r.due_in_ms.max(0)))
+        .format(&Rfc3339)
+        .unwrap_or_default();
     RetryRowView {
         issue_id: r.issue_id.clone(),
         issue_identifier: r.identifier.clone(),

@@ -91,7 +91,9 @@ fn make_config(max_concurrent: usize) -> Arc<ServiceConfig> {
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into(), "Cancelled".into()],
         },
-        polling: PollingConfig { interval_ms: 30_000 },
+        polling: PollingConfig {
+            interval_ms: 30_000,
+        },
         workspace: WorkspaceConfig {
             root: PathBuf::from("/tmp/sym-test"),
         },
@@ -178,11 +180,7 @@ async fn dispatches_eligible_issues_in_priority_order() {
     let (handle, _join) = spawn_actor(cfg, tracker, runner.clone()).await;
     handle.tick().await;
     wait_for_dispatches(&runner, 2).await;
-    let dispatched: Vec<String> = runner
-        .dispatched()
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
+    let dispatched: Vec<String> = runner.dispatched().into_iter().map(|(id, _)| id).collect();
     assert_eq!(dispatched, vec!["MT-1", "MT-2"]);
     handle.shutdown().await;
 }
@@ -325,7 +323,7 @@ async fn snapshot_reports_running_and_codex_totals() {
         .raw_sender()
         .send(OrchestratorCommand::CodexUpdate {
             issue_id: "a".into(),
-            event,
+            event: Box::new(event),
         })
         .await
         .unwrap();

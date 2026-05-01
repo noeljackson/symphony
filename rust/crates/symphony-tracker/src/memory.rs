@@ -87,7 +87,12 @@ impl Tracker for MemoryTracker {
                 state: i.state,
             })
             .collect();
-        out.sort_by_key(|s| issue_ids.iter().position(|id| id == &s.id).unwrap_or(usize::MAX));
+        out.sort_by_key(|s| {
+            issue_ids
+                .iter()
+                .position(|id| id == &s.id)
+                .unwrap_or(usize::MAX)
+        });
         Ok(out)
     }
 }

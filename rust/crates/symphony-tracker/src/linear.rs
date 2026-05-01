@@ -97,7 +97,11 @@ impl ReqwestTransport {
             .timeout(std::time::Duration::from_millis(NETWORK_TIMEOUT_MS))
             .build()
             .expect("reqwest client");
-        Self { client, endpoint, auth }
+        Self {
+            client,
+            endpoint,
+            auth,
+        }
     }
 }
 
@@ -179,7 +183,8 @@ impl LinearClient {
 #[async_trait]
 impl Tracker for LinearClient {
     async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_paginated_by_states(&self.cfg.active_states).await
+        self.fetch_paginated_by_states(&self.cfg.active_states)
+            .await
     }
 
     async fn fetch_issues_by_states(
@@ -294,7 +299,13 @@ fn decode_page_response(body: &Value) -> Result<(Vec<Issue>, PageInfo), TrackerE
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    Ok((issues, PageInfo { has_next_page, end_cursor }))
+    Ok((
+        issues,
+        PageInfo {
+            has_next_page,
+            end_cursor,
+        },
+    ))
 }
 
 fn next_cursor(p: &PageInfo) -> Result<Option<String>, TrackerError> {
@@ -504,8 +515,7 @@ mod tests {
     #[tokio::test]
     async fn fetches_candidate_issues_with_project_slug_filter() {
         let nodes = json!([issue_node("a", "MT-1", "Todo")]);
-        let transport =
-            ScriptedTransport::new(vec![Ok(page_response(nodes, false, Some("end")))]);
+        let transport = ScriptedTransport::new(vec![Ok(page_response(nodes, false, Some("end")))]);
         let client = LinearClient::with_transport(config(), transport.clone());
 
         let issues = client.fetch_candidate_issues().await.unwrap();
@@ -534,7 +544,10 @@ mod tests {
 
         let issues = client.fetch_candidate_issues().await.unwrap();
         assert_eq!(
-            issues.iter().map(|i| i.identifier.clone()).collect::<Vec<_>>(),
+            issues
+                .iter()
+                .map(|i| i.identifier.clone())
+                .collect::<Vec<_>>(),
             vec!["MT-1", "MT-2"]
         );
         let calls = transport.calls();
@@ -611,7 +624,10 @@ mod tests {
             "results should be reordered to match the requested IDs"
         );
         let (query, vars) = &transport.calls()[0];
-        assert!(query.contains("[ID!]!"), "must use ID typing per SPEC §11.2");
+        assert!(
+            query.contains("[ID!]!"),
+            "must use ID typing per SPEC §11.2"
+        );
         assert_eq!(vars["ids"], json!(["a", "b"]));
     }
 
@@ -619,7 +635,11 @@ mod tests {
     fn normalizes_labels_to_lowercase_and_extracts_blockers() {
         let issue = normalize_issue(&issue_node("a", "MT-1", "Todo")).unwrap();
         assert_eq!(issue.labels, vec!["bug", "backend"]);
-        assert_eq!(issue.blocked_by.len(), 1, "only `blocks` relation should count");
+        assert_eq!(
+            issue.blocked_by.len(),
+            1,
+            "only `blocks` relation should count"
+        );
         let blocker = &issue.blocked_by[0];
         assert_eq!(blocker.id.as_deref(), Some("B1"));
         assert_eq!(blocker.identifier.as_deref(), Some("MT-99"));

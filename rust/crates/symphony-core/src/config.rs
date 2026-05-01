@@ -131,7 +131,13 @@ impl ServiceConfig {
                 if self.tracker.api_key.as_deref().unwrap_or("").is_empty() {
                     return Err(ConfigError::MissingTrackerApiKey);
                 }
-                if self.tracker.project_slug.as_deref().unwrap_or("").is_empty() {
+                if self
+                    .tracker
+                    .project_slug
+                    .as_deref()
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err(ConfigError::MissingTrackerProjectSlug);
                 }
             }
@@ -152,7 +158,10 @@ fn get_map<'a>(raw: &'a Mapping, key: &str) -> Option<&'a Mapping> {
 
 fn parse_tracker(map: Option<&Mapping>) -> Result<TrackerConfig, ConfigError> {
     let m = empty_if_none(map);
-    let kind_raw = m.get(Value::from("kind")).and_then(|v| v.as_str()).unwrap_or("linear");
+    let kind_raw = m
+        .get(Value::from("kind"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("linear");
     let kind = TrackerKind::parse(kind_raw);
 
     let endpoint = m
@@ -451,9 +460,7 @@ mod tests {
     #[test]
     fn missing_project_slug_fails_validation() {
         std::env::set_var("SYMPHONY_TEST_KEY2", "x");
-        let cfg = config_from(
-            "tracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY2",
-        );
+        let cfg = config_from("tracker:\n  kind: linear\n  api_key: $SYMPHONY_TEST_KEY2");
         let err = cfg.validate_for_dispatch().unwrap_err();
         assert!(matches!(err, ConfigError::MissingTrackerProjectSlug));
         std::env::remove_var("SYMPHONY_TEST_KEY2");

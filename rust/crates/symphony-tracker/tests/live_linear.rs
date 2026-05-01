@@ -48,7 +48,11 @@ async fn live_linear_viewer_via_tool() {
         .output
         .pointer("/data/viewer/id")
         .and_then(|v| v.as_str());
-    assert!(id.is_some(), "expected data.viewer.id in: {:?}", result.output);
+    assert!(
+        id.is_some(),
+        "expected data.viewer.id in: {:?}",
+        result.output
+    );
 }
 
 #[tokio::test]
@@ -82,7 +86,10 @@ async fn live_linear_candidate_fetch() {
     // parses, the auth works, and the response normalizes.
     for issue in &issues {
         assert!(!issue.id.is_empty(), "issue.id must be non-empty");
-        assert!(!issue.identifier.is_empty(), "issue.identifier must be non-empty");
+        assert!(
+            !issue.identifier.is_empty(),
+            "issue.identifier must be non-empty"
+        );
     }
     eprintln!("live Linear smoke: fetched {} issue(s)", issues.len());
 }
