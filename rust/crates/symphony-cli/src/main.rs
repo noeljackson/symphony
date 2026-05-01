@@ -1,6 +1,7 @@
-//! `symphony` binary. SPEC §17.7 + §18.2 (`symphony doctor`).
+//! `symphony` binary. SPEC §17.7 + §18.2 (`symphony doctor`, `symphony logs`).
 
 mod doctor;
+mod logs;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -48,6 +49,22 @@ enum Command {
         /// Path to `WORKFLOW.md`. Defaults to `./WORKFLOW.md`.
         workflow_path: Option<PathBuf>,
     },
+    /// Tail per-issue agent activity from a running Symphony HTTP server.
+    /// SPEC v2 §13.7.2 + §18.2.
+    Logs {
+        /// Issue identifier (case-insensitive), e.g. `MT-649`.
+        identifier: String,
+        /// HTTP base URL of the running orchestrator (e.g.
+        /// `http://localhost:8080`). The CLI calls
+        /// `<url>/api/v1/<identifier>` for backfill and
+        /// `<url>/api/v1/events` for the live tail.
+        #[arg(long)]
+        url: String,
+        /// Print the backfill and exit. Default is to follow the SSE
+        /// stream until interrupted.
+        #[arg(long, default_value_t = false)]
+        no_follow: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -77,6 +94,32 @@ fn main() -> ExitCode {
                 .or(cli.workflow_path)
                 .unwrap_or_else(|| PathBuf::from("./WORKFLOW.md"));
             runtime.block_on(async move { run_doctor(&path).await })
+        }
+        Some(Command::Logs {
+            identifier,
+            url,
+            no_follow,
+        }) => {
+            if let Err(e) = logs::parse_url(&url) {
+                eprintln!("symphony logs: {e}");
+                return ExitCode::from(2);
+            }
+            runtime.block_on(async move {
+                let args = logs::LogsArgs {
+                    identifier: &identifier,
+                    url: &url,
+                    follow: !no_follow,
+                };
+                let stdout = std::io::stdout();
+                match logs::run(args, stdout).await {
+                    Ok(0) => ExitCode::SUCCESS,
+                    Ok(code) => ExitCode::from(code),
+                    Err(e) => {
+                        eprintln!("symphony logs: {e:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            })
         }
         None => {
             let path = cli

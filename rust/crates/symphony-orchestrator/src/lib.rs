@@ -22,7 +22,10 @@ pub use dispatch::{
 };
 pub use pricing::{builtin_price_table, ModelPrice, PriceTable, TokenUsage};
 pub use runner::{RealWorker, WorkspaceManagerCleaner};
-pub use state::{AgentTotals, LiveSession, OrchestratorState, RetryEntry, RunningEntry};
+pub use state::{
+    AgentTotals, LiveSession, OrchestratorState, RecentEvent, RetryEntry, RunningEntry,
+    RECENT_EVENTS_CAP,
+};
 pub use worker::{WorkerExit, WorkerOutcome, WorkerRunner};
 pub use workspace_cleaner::{NoopCleaner, WorkspaceCleaner};
 

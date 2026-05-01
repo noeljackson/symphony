@@ -86,6 +86,32 @@ fn doctor_reports_missing_dispatch_fields() {
 }
 
 #[test]
+fn logs_rejects_url_without_scheme() {
+    let out = Command::new(binary())
+        .args(["logs", "MT-1", "--url", "localhost:8080"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--url must start with http"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn logs_reports_unreachable_url() {
+    // Pick a port we expect to be free; a connection error gets exit code 2.
+    let out = Command::new(binary())
+        .args(["logs", "MT-1", "--url", "http://127.0.0.1:1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("symphony logs:"), "stderr was: {stderr}");
+}
+
+#[test]
 fn workflow_with_missing_api_key_fails_preflight() {
     let tmp = tempfile::tempdir().unwrap();
     let workflow = tmp.path().join("WORKFLOW.md");
