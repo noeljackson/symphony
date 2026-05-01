@@ -17,8 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Show Rust toolchain
+      - name: Update Rust toolchain
         run: |
+          rustup self update
+          rustup update stable
+          rustup default stable
           rustup show
           cargo --version
           rustc --version
