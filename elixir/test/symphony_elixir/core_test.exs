@@ -184,7 +184,10 @@ defmodule SymphonyElixir.CoreTest do
     workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "UNTERMINATED_WORKFLOW.md")
     File.write!(workflow_path, "---\ntracker:\n  kind: linear\n")
 
-    assert {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}} = Workflow.load(workflow_path)
+    assert match?(
+             {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}},
+             Workflow.load(workflow_path)
+           )
   end
 
   test "workflow load rejects non-map front matter" do
@@ -585,7 +588,12 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} = state.retry_attempts[issue_id]
+    assert match?(
+             %{attempt: 3, due_at_ms: _, identifier: "MT-559", error: "agent exited: :boom"},
+             state.retry_attempts[issue_id]
+           )
+
+    %{due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 39_500, 40_500)
   end
@@ -623,7 +631,12 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} = state.retry_attempts[issue_id]
+    assert match?(
+             %{attempt: 1, due_at_ms: _, identifier: "MT-560", error: "agent exited: :boom"},
+             state.retry_attempts[issue_id]
+           )
+
+    %{due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 9_000, 10_500)
   end
@@ -683,14 +696,16 @@ defmodule SymphonyElixir.CoreTest do
       agent_rate_limits: nil
     }
 
-    assert {:reply, %{queued: true, coalesced: false}, refreshed_state} = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, state)
+    refresh_reply = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, state)
+    assert {:reply, %{queued: true, coalesced: false}, refreshed_state} = refresh_reply
 
     assert is_reference(refreshed_state.tick_timer_ref)
     assert is_reference(refreshed_state.tick_token)
     refute refreshed_state.tick_token == stale_tick_token
     assert refreshed_state.next_poll_due_at_ms <= System.monotonic_time(:millisecond)
 
-    assert {:reply, %{queued: true, coalesced: true}, coalesced_state} = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
+    coalesce_reply = Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
+    assert {:reply, %{queued: true, coalesced: true}, coalesced_state} = coalesce_reply
 
     assert coalesced_state.tick_token == refreshed_state.tick_token
     assert {:noreply, ^coalesced_state} = Orchestrator.handle_info({:tick, stale_tick_token}, coalesced_state)
@@ -918,7 +933,9 @@ defmodule SymphonyElixir.CoreTest do
 
     assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.WorkflowStore)
 
-    Workflow.set_workflow_file_path(Path.join(System.tmp_dir!(), "missing-workflow-#{System.unique_integer([:positive])}.md"))
+    missing_workflow_path = Path.join(System.tmp_dir!(), "missing-workflow-#{System.unique_integer([:positive])}.md")
+
+    Workflow.set_workflow_file_path(missing_workflow_path)
 
     issue = %Issue{
       identifier: "MT-780",
@@ -1189,7 +1206,8 @@ defmodule SymphonyElixir.CoreTest do
           exit 75
           ;;
         *worker-b*"__SYMPHONY_WORKSPACE__"*)
-          printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '1' '/remote/home/.symphony-remote-workspaces/MT-SSH-FAILOVER'
+          ws_root='/remote/home/.symphony-remote-workspaces/MT-SSH-FAILOVER'
+          printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '1' "$ws_root"
           exit 0
           ;;
         *)
