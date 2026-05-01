@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   make-all:
@@ -44,6 +45,10 @@ jobs:
         run: make build
 
       - name: mix format --check-formatted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set +e
           mix format --check-formatted
@@ -51,10 +56,31 @@ jobs:
           if [ $rc -ne 0 ]; then
             mix format
             git --no-pager diff
-            git config user.email "ci@symphony"
-            git config user.name "Symphony CI (mix format)"
-            git commit -am "ci(elixir): apply mix format (Elixir 1.19)" || true
-            git push origin "HEAD:${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" || true
+            if [ -n "$PR_NUMBER" ]; then
+              python3 - <<'PY'
+import json, os, subprocess, urllib.request
+diff = subprocess.check_output(['git', '--no-pager', 'diff']).decode('utf-8', 'replace')
+if not diff.strip():
+    raise SystemExit(0)
+body = "## mix format diff (Elixir 1.19)\n\n```diff\n" + diff + "\n```"
+data = json.dumps({"body": body}).encode()
+pr = os.environ['PR_NUMBER']
+repo = os.environ['REPO']
+url = f"https://api.github.com/repos/{repo}/issues/{pr}/comments"
+req = urllib.request.Request(
+    url, data=data,
+    headers={
+        "Authorization": f"token {os.environ['GH_TOKEN']}",
+        "Accept": "application/vnd.github+json",
+    },
+)
+try:
+    resp = urllib.request.urlopen(req)
+    print("comment posted:", resp.status)
+except Exception as e:
+    print("comment post failed:", e)
+PY
+            fi
             exit $rc
           fi
 
