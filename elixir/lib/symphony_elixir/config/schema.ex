@@ -161,8 +161,7 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> validate_inclusion(:backend, @implemented_backends,
-        message:
-          "this Elixir reference only implements `codex`; SPEC v2 also defines #{Enum.join(@spec_backends -- @implemented_backends, ", ")} but those backends are not built here"
+        message: "this Elixir reference only implements `codex`; SPEC v2 also defines #{Enum.join(@spec_backends -- @implemented_backends, ", ")} but those backends are not built here"
       )
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
