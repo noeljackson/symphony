@@ -21,6 +21,10 @@ symphony-codex.workspace = true
 symphony-workspace.workspace = true
 symphony-orchestrator.workspace = true
 symphony-http.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

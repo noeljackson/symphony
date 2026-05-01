@@ -56,10 +56,19 @@ should land before broader feature work; the rest are pull-as-needed.
 
 ### P2 — operator quality of life
 
-- [ ] **`symphony logs <identifier>`** — SPEC §18.2
-  - Tails the agent-session logs surfaced by the snapshot's `agent_session_logs` array
-  - No need for the operator to know the on-disk layout
-  - Tests: round-trip test that boots a fake-agent run, captures logs, then tails them via the CLI
+- [x] **`symphony logs <identifier>`** — SPEC §13.7.2 / §18.2
+      (spec PR #16, Rust impl PR #17)
+  - Per-issue ring buffer of recent agent events (`recent_events`,
+    cap 50) surfaced via `GET /api/v1/<id>`.
+  - `symphony logs <id> --url <url>` prints backfill from
+    `recent_events`. With `--follow` (default) it subscribes to
+    `/api/v1/events` and prints events whose `issue_identifier`
+    matches; `--no-follow` exits after backfill. 404 on unknown
+    identifier exits `1`.
+  - Tests: state ring-buffer cap, http response includes
+    `recent_events` array, CLI smoke covers URL validation +
+    unreachable-server error handling, plus four unit tests in the
+    `logs` module.
 
 - [x] **Per-issue cost tracking + daily budget cap** — SPEC §13.5 / §5.3.5
       (spec PR #14, Rust impl PR #15)

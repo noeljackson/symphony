@@ -1965,6 +1965,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
  "symphony-codex",
  "symphony-core",
  "symphony-http",
