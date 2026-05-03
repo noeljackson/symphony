@@ -1,15 +1,26 @@
 # Symphony Service Specification
 
-Status: Draft v2 (language-agnostic, multi-backend)
+Status: Draft v3 (multi-backend, multi-tracker, persistent)
 
 Purpose: Define a service that orchestrates coding agents to get project work done.
 
-v2 generalizes the agent-runner contract so any compatible backend (Codex
+v3 builds on v2's multi-backend foundation by adding two things v2 left
+implementation-defined: a normative **persistent state store** contract
+(§4.1.9) so cost ledgers, retry queues, and `recent_events` survive
+process restart, and a second tracker kind — **GitHub Issues** —
+alongside Linear (§5.3.1.A / §5.3.1.B). The tracker config is restructured
+into per-kind subblocks (parallel to v2's `agent.backend` + per-backend
+blocks) so adding future trackers (Jira, GitLab, etc.) does not require
+re-shaping the shared `tracker` object. v3 is a clean break from v2's
+flat Linear-only `tracker` shape: `tracker.endpoint`, `tracker.api_key`,
+and `tracker.project_slug` move into a `linear:` subblock.
+
+v2 generalized the agent-runner contract so any compatible backend (Codex
 app-server, Claude Code, OpenAI-compatible HTTP APIs such as Kimi K2 and GLM,
 the Anthropic Messages API, and others) can be plugged in. Backends are
-selected per-workflow via `agent.backend`. v2 is a clean break from v1's
-Codex-only assumptions: runtime fields named `codex_*` are renamed to
-`agent_*`, and the §10 protocol section is restructured as a generic contract
+selected per-workflow via `agent.backend`. v2 was a clean break from v1's
+Codex-only assumptions: runtime fields named `codex_*` were renamed to
+`agent_*`, and the §10 protocol section was restructured as a generic contract
 plus per-backend subsections.
 
 ## Normative Language
@@ -276,19 +287,100 @@ Fields:
 
 #### 4.1.8 Orchestrator Runtime State
 
-Single authoritative in-memory state owned by the orchestrator.
+Single authoritative in-memory state owned by the orchestrator. A subset of
+these fields is persisted across process restart per §4.1.9.
 
 Fields:
 
 - `poll_interval_ms` (current effective poll interval)
 - `max_concurrent_agents` (current effective global concurrency limit)
 - `running` (map `issue_id -> running entry`)
-- `claimed` (set of issue IDs reserved/running/retrying)
-- `retry_attempts` (map `issue_id -> RetryEntry`)
+- `claimed` (set of issue IDs reserved/running/retrying) — **persisted**
+- `retry_attempts` (map `issue_id -> RetryEntry`) — **persisted**
 - `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
 - `agent_totals` (aggregate tokens, runtime seconds, and USD cost; see §13.5)
+  — **persisted**
 - `agent_rate_limits` (latest rate-limit snapshot from agent events)
-- `daily_cost_window` (current UTC-day budget window; see §13.5)
+- `daily_cost_window` (current UTC-day budget window; see §13.5) —
+  **persisted**
+- `last_budget_warning_pct` (warning suppressor; see §13.5) — **persisted**
+
+#### 4.1.9 Persistent State Store
+
+A persistent state store keeps cost ledger, retry queue, and per-issue
+recent-events metadata across orchestrator process restart. Without it,
+restarts silently zero out cost counters (defeating §13.5 budget caps),
+reset retry backoff exponents (mid-storm restarts re-amplify failure
+pressure), and blank the per-issue `recent_events` ring buffer (defeating
+`symphony logs` for issues that were running pre-restart).
+
+Persisted fields:
+
+- `agent_totals` — `input_tokens`, `output_tokens`, `total_tokens`,
+  `seconds_running`, `cost_usd`, `cost_usd_today`.
+- `daily_cost_window` (UTC date), `last_budget_warning_pct`.
+- `retry_attempts` — full `RetryEntry` rows (`issue_id`, `identifier`,
+  `attempt`, `due_at`, `error`).
+- `recent_events` — per-issue ring-buffer entries (§13.7.2). Each row
+  references its `issue_id` and is bounded by the implementation's
+  cap (RECOMMENDED 50).
+- `claimed` — set of in-flight issue IDs. Used at boot to detect
+  workers that crashed with the orchestrator.
+
+NOT persisted (re-derived on restart):
+
+- `running` map. Worker tasks don't survive process restart; on boot
+  the orchestrator MUST treat any persisted `claimed` IDs as "needs
+  reconciliation" and either rescheduling (if the issue is still in
+  an active state per the tracker) or releasing.
+- `agent_rate_limits` — implementations re-populate from the next
+  agent event.
+- `poll_interval_ms`, `max_concurrent_agents` — re-loaded from the
+  current `WORKFLOW.md` on boot, not from the store.
+
+Storage:
+
+- The canonical reference store for v3 is **PostgreSQL**.
+- Implementations SHOULD ship a `StateStore` abstraction so other
+  backends (SQLite, in-memory for tests) can satisfy the same
+  contract. The abstraction is implementation-defined; this spec
+  only constrains observable behavior.
+- Schema migrations are implementation-defined. Implementations MUST
+  refuse to start when the store schema is incompatible with the
+  running binary, and SHOULD print actionable migration guidance.
+
+Atomicity:
+
+- Updates that mutate multiple persisted fields together — for example
+  "add cost delta + advance the warning suppressor" — MUST commit as
+  a single transaction. Crashing mid-update MUST NOT leave the store
+  in a state where the daily warning fires twice or the cost delta is
+  lost.
+
+Restart semantics:
+
+- On boot, before the first poll-and-dispatch tick, the orchestrator
+  MUST:
+  1. Load persisted state from the store; if the store is empty, fall
+     back to fresh defaults (matching §16.1 init).
+  2. Roll over `cost_usd_today` if `daily_cost_window` is stale (per
+     §13.5), preserving the lifetime `cost_usd` counter.
+  3. Reconcile `claimed` against the tracker: for each persisted
+     `claimed` ID, fetch the issue's current state. If terminal, drop
+     from `claimed`; if active, re-queue as a retry attempt with an
+     `error: "process restart"` entry so backoff bookkeeping is
+     visible to operators; if missing from the tracker, drop and log.
+  4. Resume scheduled retries whose `due_at` is in the past by firing
+     them on the first tick.
+- The first poll-and-dispatch tick MUST NOT fire candidate issues
+  until step 3 has completed.
+
+Multi-process safety:
+
+- A single physical store MUST NOT be shared across multiple
+  concurrent orchestrator processes against the same workflow without
+  implementation-defined leasing. v3 core conformance assumes a
+  single orchestrator process per (workflow, store).
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -366,23 +458,89 @@ Note:
 
 #### 5.3.1 `tracker` (object)
 
-Fields:
+Fields shared across all tracker kinds:
 
 - `kind` (string)
   - REQUIRED for dispatch.
-  - Current supported value: `linear`
-- `endpoint` (string)
-  - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
-- `api_key` (string)
-  - MAY be a literal token or `$VAR_NAME`.
-  - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
-  - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
-- `project_slug` (string)
-  - REQUIRED for dispatch when `tracker.kind == "linear"`.
+  - Supported values for v3 core conformance:
+    - `linear` — Linear GraphQL API (see §5.3.1.A)
+    - `github` — GitHub Issues REST/GraphQL API (see §5.3.1.B)
+  - Implementations MAY support a subset and MUST document which kinds
+    are available. Unknown values fail dispatch preflight validation.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
   - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
+
+Each tracker kind's auth/endpoint configuration lives in its own per-kind
+block at the workflow front-matter root, parallel to `agent.backend` and
+its per-backend blocks under §5.3.6. Exactly one tracker block SHOULD be
+populated, matching the value of `tracker.kind`. Other blocks MAY be
+present but are ignored.
+
+##### 5.3.1.A `linear` (object)
+
+Used when `tracker.kind == "linear"`.
+
+- `endpoint` (string)
+  - Default: `https://api.linear.app/graphql`
+- `api_key` (string)
+  - REQUIRED for dispatch.
+  - MAY be a literal token or `$VAR_NAME`.
+  - Canonical environment variable: `LINEAR_API_KEY`.
+  - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
+- `project_slug` (string)
+  - REQUIRED for dispatch.
+
+##### 5.3.1.B `github` (object)
+
+Used when `tracker.kind == "github"`. Targets the GitHub Issues REST API
+(REST v3) or GraphQL v4; implementations choose. Supports both personal-
+access-token (PAT) and GitHub App installation auth.
+
+- `endpoint` (string)
+  - Default: `https://api.github.com`
+  - Override for GitHub Enterprise Server.
+- `owner` (string)
+  - REQUIRED for dispatch. The GitHub user or organization that owns
+    the repo.
+- `repo` (string)
+  - REQUIRED for dispatch. The repository name (without owner prefix).
+- `api_token` (string)
+  - REQUIRED for dispatch unless GitHub App installation creds are
+    present.
+  - MAY be a literal token or `$VAR_NAME`.
+  - Canonical environment variable: `GITHUB_TOKEN`.
+  - PAT MUST have at minimum the `issues:read` and `issues:write`
+    scopes for the configured repo.
+- `app_id`, `app_installation_id`, `private_key` (strings, OPTIONAL)
+  - GitHub App installation auth. When present, take precedence over
+    `api_token`. `private_key` MAY be a `$VAR_NAME` pointing at a PEM-
+    encoded private key.
+- `label_priority_map` (map `label_name -> integer`, OPTIONAL)
+  - Default: empty map.
+  - GitHub Issues have no native priority field. Implementations
+    SHOULD use this map to convert label names to integer priorities
+    for the §16.2 dispatch sort. Unmapped issues default to priority
+    `1` (one rank below `0`). Lower numeric value = higher priority,
+    matching Linear's convention.
+- `assignee` (string, OPTIONAL)
+  - When set, dispatch only considers issues assigned to this GitHub
+    login. Useful when one GitHub repo is shared by multiple Symphony
+    operators.
+
+State-mapping notes for GitHub:
+
+- GitHub issues have a built-in lifecycle (`open` / `closed`). The
+  default `active_states` (`Todo`, `In Progress`) and `terminal_states`
+  (`Done`, etc.) are matched against **labels** on the issue, not the
+  built-in state — so an `open` issue with no matching label is NOT
+  dispatched. Implementations MAY treat the literal string `open` /
+  `closed` as a fallback when no labels match.
+- Implementations MUST treat `closed` issues as terminal even when no
+  matching label is present.
+- The `branch_name` field on `Issue` is RECOMMENDED to be derived from
+  the issue number and slugified title (e.g. `123-fix-login-flow`).
 
 #### 5.3.2 `polling` (object)
 
@@ -1836,6 +1994,13 @@ Enablement (extension):
   retry delays, token consumption, runtime totals, recent events, and health/error indicators).
 - It is up to the implementation whether this is server-generated HTML or a client-side app that
   consumes the JSON API below.
+- The canonical reference dashboard for v3 is **server-rendered HTML**
+  (e.g. Go `templ` components) with reactive updates pushed via the
+  §13.7.4 SSE stream — for example using a Datastar-style hypermedia
+  framework that morphs DOM fragments and updates client-side signals.
+  Implementations MAY substitute a single-page client app (React, Vue,
+  Svelte, or vanilla JS) consuming the same API + SSE contracts; the
+  observable behavior is identical from the operator's perspective.
 
 #### 13.7.2 JSON REST API (`/api/v1/*`)
 
@@ -2118,19 +2283,29 @@ implementation MAY expose a Server-Sent Events stream:
 
 ### 14.3 Partial State Recovery (Restart)
 
-Current design is intentionally in-memory for scheduler state.
-Restart recovery means the service can resume useful operation by polling tracker state and reusing
-preserved workspaces. It does not mean retry timers, running sessions, or live worker state survive
-process restart.
+Restart recovery is split between the persistent state store (§4.1.9)
+and the tracker. The persistent store carries the cost ledger, retry
+queue, `recent_events` ring buffer, and `claimed` set across restart;
+running worker tasks themselves do not survive (they are external
+processes / agents that the orchestrator no longer holds handles to).
 
 After restart:
 
-- No retry timers are restored from prior process memory.
-- No running sessions are assumed recoverable.
-- Service recovers by:
-  - startup terminal workspace cleanup
-  - fresh polling of active issues
-  - re-dispatching eligible work
+- Persisted retry attempts are restored from the store, including the
+  current attempt count so exponential backoff stays exponential
+  across restarts.
+- The cost ledger (`cost_usd`, `cost_usd_today`) is restored; budget
+  caps continue to enforce against the cumulative day total.
+- The `recent_events` ring buffer is restored per issue so
+  `symphony logs` can backfill events that landed before the restart.
+- Running worker handles are NOT restored; persisted `claimed` IDs are
+  reconciled against the tracker on boot per §4.1.9 (still-active
+  issues are re-queued as retries with `error: "process restart"`;
+  terminal or missing issues are dropped).
+- Workspaces persist on the filesystem; startup terminal-workspace
+  cleanup runs as before.
+- The first dispatch tick fires only after `claimed`-reconciliation
+  completes.
 
 ### 14.4 Operator Intervention Points
 
@@ -2235,25 +2410,30 @@ function start_service():
   start_observability_outputs()
   start_workflow_watch(on_change=reload_and_reapply_workflow)
 
-  state = {
-    poll_interval_ms: get_config_poll_interval_ms(),
-    max_concurrent_agents: get_config_max_concurrent_agents(),
-    running: {},
-    claimed: set(),
-    retry_attempts: {},
-    completed: set(),
-    agent_totals: {
-      input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0,
-      cost_usd: 0.0, cost_usd_today: 0.0
-    },
-    agent_rate_limits: null,
-    daily_cost_window_utc_date: today_utc_date()
-  }
+  # SPEC v3 §4.1.9: load persisted state, fall back to fresh defaults if
+  # the store is empty. Persisted state covers the cost ledger, retry
+  # queue, recent_events ring buffer, and the claimed-set so we can
+  # detect workers that crashed with the orchestrator.
+  state = state_store.restore_or_empty()
+
+  # Re-load runtime knobs from the current WORKFLOW.md (not the store);
+  # operators may have edited the config since the last shutdown.
+  state.poll_interval_ms = get_config_poll_interval_ms()
+  state.max_concurrent_agents = get_config_max_concurrent_agents()
+
+  # Lazy daily-window rollover after a long shutdown.
+  state = roll_over_daily_cost_if_needed(state)
 
   validation = validate_dispatch_config()
   if validation is not ok:
     log_validation_error(validation)
     fail_startup(validation)
+
+  # SPEC v3 §4.1.9 step 3-4: reconcile any persisted `claimed` IDs
+  # against the tracker before the first dispatch tick fires. Issues
+  # that are still active get re-queued as retries with an
+  # `error: "process restart"` entry; terminal/missing ones drop.
+  state = reconcile_claimed_after_restart(state)
 
   startup_terminal_workspace_cleanup()
   schedule_tick(delay_ms=0)
@@ -2757,7 +2937,6 @@ Use the same validation profiles as Section 17:
   and process lifecycle but maintaining isolated orchestrator state per
   workflow. Useful when one operator runs Symphony against several
   Linear projects from one host.
-- TODO: Persist retry queue and session metadata across process restarts.
 - TODO: Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
