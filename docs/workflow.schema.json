@@ -2,11 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/noeljackson/symphony/blob/main/docs/workflow.schema.json",
   "title": "Symphony WORKFLOW.md front matter",
-  "description": "JSON Schema for the YAML front matter of WORKFLOW.md, per SPEC v2 §5.3. Editors (VS Code, Zed) can use this for autocomplete and inline diagnostics. The Markdown body following the front matter is the Liquid prompt template and is out of scope for this schema.",
+  "description": "JSON Schema for the YAML front matter of WORKFLOW.md, per SPEC v3 §5.3. Editors (VS Code, Zed) can use this for autocomplete and inline diagnostics. The Markdown body following the front matter is the Liquid prompt template and is out of scope for this schema.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
     "tracker": { "$ref": "#/$defs/tracker" },
+    "linear": { "$ref": "#/$defs/linear" },
+    "github": { "$ref": "#/$defs/github" },
     "polling": { "$ref": "#/$defs/polling" },
     "workspace": { "$ref": "#/$defs/workspace" },
     "hooks": { "$ref": "#/$defs/hooks" },
@@ -24,21 +26,8 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["linear"],
-          "description": "Tracker adapter selector. Currently only `linear` is supported."
-        },
-        "endpoint": {
-          "type": "string",
-          "format": "uri",
-          "description": "GraphQL endpoint. Default: https://api.linear.app/graphql"
-        },
-        "api_key": {
-          "type": "string",
-          "description": "API token, or `$VAR_NAME` to read from the environment. Canonical env var for Linear: LINEAR_API_KEY."
-        },
-        "project_slug": {
-          "type": "string",
-          "description": "Linear project slugId. Required for `tracker.kind == \"linear\"`."
+          "enum": ["linear", "github"],
+          "description": "Tracker adapter selector. Per-kind auth/endpoint config lives in the matching top-level block (`linear:` or `github:`). SPEC v3 §5.3.1."
         },
         "active_states": {
           "type": "array",
@@ -50,7 +39,65 @@
           "items": { "type": "string" },
           "default": ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
         }
-      }
+      },
+      "required": ["kind"]
+    },
+    "linear": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "SPEC v3 §5.3.1.A. Populated when tracker.kind == \"linear\".",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://api.linear.app/graphql"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "API token, or `$VAR_NAME` to read from the environment. Canonical env var: LINEAR_API_KEY."
+        },
+        "project_slug": {
+          "type": "string",
+          "description": "Linear project slugId."
+        }
+      },
+      "required": ["api_key", "project_slug"]
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "SPEC v3 §5.3.1.B. Populated when tracker.kind == \"github\".",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://api.github.com",
+          "description": "Override for GitHub Enterprise Server."
+        },
+        "owner": { "type": "string", "description": "GitHub user or organization that owns the repo." },
+        "repo": { "type": "string", "description": "Repository name (without owner prefix)." },
+        "api_token": {
+          "type": "string",
+          "description": "PAT, or `$VAR_NAME`. Canonical env var: GITHUB_TOKEN. Required unless GitHub App installation creds are present."
+        },
+        "app_id": { "type": "string" },
+        "app_installation_id": { "type": "string" },
+        "private_key": {
+          "type": "string",
+          "description": "PEM-encoded private key, or `$VAR_NAME`. GitHub App auth path."
+        },
+        "label_priority_map": {
+          "type": "object",
+          "additionalProperties": { "type": "integer" },
+          "default": {},
+          "description": "Map label names to integer priorities for the §16.2 dispatch sort. Lower value = higher priority."
+        },
+        "assignee": {
+          "type": "string",
+          "description": "When set, dispatch only considers issues assigned to this GitHub login."
+        }
+      },
+      "required": ["owner", "repo"]
     },
     "polling": {
       "type": "object",
