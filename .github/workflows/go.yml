@@ -1,0 +1,39 @@
+name: go
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: go/go.sum
+
+      - name: gofmt
+        run: |
+          diff=$(gofmt -d $(find . -name '*.go') 2>/dev/null)
+          if [ -n "$diff" ]; then
+            echo "gofmt diff (run 'cd go && make fmt'):"
+            echo "$diff"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -timeout 60s ./...

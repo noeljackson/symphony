@@ -13,8 +13,9 @@ implementations live alongside it:
 
 | Tree | Status |
 |---|---|
-| [`elixir/`](elixir/) | Original reference. Single backend (`codex`). Phoenix dashboard, full feature tour. |
-| [`rust/`](rust/) | Newer reference. Tracks SPEC v2 directly. Two backends today (`codex`, `claude_code`); `openai_compat` and `anthropic_messages` TBD. |
+| [`elixir/`](elixir/) | Original reference. Single backend (`codex`). Phoenix LiveView dashboard, full feature tour. |
+| [`rust/`](rust/) | First-port reference for SPEC v2. Two backends (`codex`, `claude_code`). Frozen at v2 — Go is the v3+ canonical impl. |
+| [`go/`](go/) | **Canonical implementation as of SPEC v3.** Single-tenant CLI; Postgres `StateStore` (forthcoming PR), templ + Datastar dashboard (forthcoming PR), backends ported one PR at a time. |
 
 ## Spec-first
 
@@ -24,8 +25,10 @@ implementations. Concretely:
 1. If your change adds, removes, or alters orchestrator-visible behavior
    (a config field, an HTTP endpoint, a runtime event, a backend
    contract), edit `SPEC.md` first and open that as a separate PR.
-2. Once the spec PR is reviewed and merged, follow up with one
-   implementation PR per tree (`elixir/`, `rust/`).
+2. Once the spec PR is reviewed and merged, follow up with the canonical
+   implementation PR in `go/`. `elixir/` and `rust/` are reference impls
+   that don't need to track newer SPEC versions; only update them
+   intentionally.
 3. Pure bug fixes / refactors / test additions that don't change spec
    behavior can skip step 1.
 
@@ -96,6 +99,29 @@ methods (`run_codex_session`, `run_claude_code_session`) share the
 workspace + hook lifecycle but inline their own turn loops on purpose
 — the closure-based shared loop fights the borrow checker for
 `&mut self` clients.
+
+## Working in `go/`
+
+The canonical Go implementation lives in [`go/`](go/). High-level workflow:
+
+```sh
+cd go
+make fmt-check
+make vet
+make test
+```
+
+Layout: `cmd/symphony/` is the binary; `internal/{config,issue,state,
+dispatch,tracker,store,orchestrator}` packages map roughly 1:1 onto the
+Rust crates. The actor pattern (single-authority `state.OrchestratorState`
+owned by one goroutine, commands through a channel) is native Go — no
+borrow-checker accommodations needed.
+
+The foundation PR ships pure-logic ports + a memory-backed `StateStore`
++ a memory-backed `Tracker` + smoke-test orchestrator integration tests.
+Postgres `StateStore`, GitHub/Linear trackers over HTTP, agent backends
+(codex / claude_code / openai_compat / anthropic_messages), HTTP server,
+and templ + Datastar dashboard each land in subsequent PRs.
 
 ## Live integration tests
 
