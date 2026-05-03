@@ -296,17 +296,21 @@ func (s *Store) AppendRecentEvent(ctx context.Context, issueID string, ev state.
 		return fmt.Errorf("insert recent_event: %w", err)
 	}
 
-	// Trim to RECENT_EVENTS_CAP by deleting the oldest entries.
+	// Trim to RECENT_EVENTS_CAP by deleting entries older than the cap-th
+	// newest (rn=cap). The subquery returns the seq of the cap-th newest;
+	// rows with seq strictly less than that are the (cap+1)th and older.
+	// When there are <=cap entries, the subquery returns NULL and the
+	// DELETE matches nothing.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM symphony_recent_events
 		WHERE issue_id = $1
-		  AND seq <= (
+		  AND seq < (
 		    SELECT seq FROM (
 		      SELECT seq, ROW_NUMBER() OVER (ORDER BY seq DESC) AS rn
 		      FROM symphony_recent_events WHERE issue_id = $1
 		    ) sub WHERE sub.rn = $2
-		  ) - 1`,
-		issueID, state.RecentEventsCap+1); err != nil {
+		  )`,
+		issueID, state.RecentEventsCap); err != nil {
 		return fmt.Errorf("trim recent_events: %w", err)
 	}
 
