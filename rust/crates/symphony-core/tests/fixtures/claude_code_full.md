@@ -1,15 +1,16 @@
 ---
 tracker:
   kind: linear
-  endpoint: https://api.linear.app/graphql
-  api_key: $LINEAR_API_KEY
-  project_slug: my-project
   active_states:
     - Todo
     - In Progress
   terminal_states:
     - Done
     - Cancelled
+linear:
+  endpoint: https://api.linear.app/graphql
+  api_key: $LINEAR_API_KEY
+  project_slug: my-project
 polling:
   interval_ms: 30000
 workspace:
