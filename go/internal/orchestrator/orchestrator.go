@@ -83,9 +83,73 @@ type Snapshot struct {
 	AgentTotals state.AgentTotals
 }
 
+// EventBroadcast is one envelope sent on each [Handle.SubscribeEvents] channel
+// when the actor records a new agent update.
+type EventBroadcast struct {
+	IssueID    string
+	Identifier string
+	Event      AgentEvent
+}
+
+// EventChannelCapacity is the per-subscriber buffer depth. Subscribers that
+// fall behind by more than this number of events get drops on the floor —
+// callers SHOULD re-snapshot to recover (SPEC §13.7.4).
+const EventChannelCapacity = 64
+
 // Handle is the public surface for talking to the actor.
 type Handle struct {
 	cmd chan Command
+
+	subsMu sync.Mutex
+	subs   map[chan EventBroadcast]struct{}
+}
+
+// SubscribeEvents registers a new subscriber. The returned channel buffers
+// up to [EventChannelCapacity] events; further events are dropped. Callers
+// MUST invoke the returned cancel function to release the subscription —
+// closing it leaks otherwise.
+func (h *Handle) SubscribeEvents() (<-chan EventBroadcast, func()) {
+	ch := make(chan EventBroadcast, EventChannelCapacity)
+	h.subsMu.Lock()
+	if h.subs == nil {
+		h.subs = map[chan EventBroadcast]struct{}{}
+	}
+	h.subs[ch] = struct{}{}
+	h.subsMu.Unlock()
+	return ch, func() {
+		h.subsMu.Lock()
+		if _, ok := h.subs[ch]; ok {
+			delete(h.subs, ch)
+			close(ch)
+		}
+		h.subsMu.Unlock()
+	}
+}
+
+// broadcast fans `ev` out to every active subscriber. Slow subscribers get
+// the event dropped (non-blocking send) so the actor never blocks on
+// observability.
+func (h *Handle) broadcast(ev EventBroadcast) {
+	h.subsMu.Lock()
+	defer h.subsMu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- ev:
+		default:
+			// drop — subscriber is too slow
+		}
+	}
+}
+
+// closeAllSubscribers releases every active subscription. Called once on
+// orchestrator shutdown so HTTP handlers see the channel close.
+func (h *Handle) closeAllSubscribers() {
+	h.subsMu.Lock()
+	defer h.subsMu.Unlock()
+	for ch := range h.subs {
+		close(ch)
+		delete(h.subs, ch)
+	}
 }
 
 // Tick triggers an immediate poll-and-dispatch cycle (SPEC §16.2).
@@ -138,6 +202,7 @@ type Orchestrator struct {
 	runner  WorkerRunner
 	store   store.Store
 	cmd     chan Command
+	handle  *Handle // shared between the actor and external callers
 	logger  *slog.Logger
 
 	// auto-scheduled tick timer; cancelled on Shutdown.
@@ -173,13 +238,16 @@ func New(cfg *config.ServiceConfig, tr tracker.Tracker, runner WorkerRunner, st 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	cmd := make(chan Command, 256)
+	h := &Handle{cmd: cmd}
 	o := &Orchestrator{
 		cfg:                  cfg,
 		state:                state.NewState(),
 		tracker:              tr,
 		runner:               runner,
 		store:                st,
-		cmd:                  make(chan Command, 256),
+		cmd:                  cmd,
+		handle:               h,
 		logger:               logger,
 		retryTimers:          map[string]*time.Timer{},
 		autoSchedule:         opts.AutoSchedule,
@@ -187,7 +255,7 @@ func New(cfg *config.ServiceConfig, tr tracker.Tracker, runner WorkerRunner, st 
 	}
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
-	return o, &Handle{cmd: o.cmd}
+	return o, h
 }
 
 // Run blocks the caller until a Shutdown command is received or ctx is
@@ -209,7 +277,7 @@ func (o *Orchestrator) Run(parent context.Context) *state.OrchestratorState {
 				o.shutdown()
 				return o.state
 			}
-			o.handle(ctx, cmd)
+			o.handleCommand(ctx, cmd)
 		case <-parent.Done():
 			cancel()
 			o.shutdown()
@@ -303,7 +371,7 @@ func (o *Orchestrator) reconcileClaimedAfterRestart(ctx context.Context) {
 	}
 }
 
-func (o *Orchestrator) handle(ctx context.Context, cmd Command) {
+func (o *Orchestrator) handleCommand(ctx context.Context, cmd Command) {
 	switch c := cmd.(type) {
 	case cmdTick:
 		o.runTick(ctx)
@@ -411,6 +479,13 @@ func (o *Orchestrator) applyAgentUpdate(ctx context.Context, issueID string, ev 
 		At:      now,
 		Event:   ev.Event,
 		Message: ev.Message,
+	})
+	// SPEC §13.7.4: fan out to SSE subscribers. Non-blocking — slow
+	// subscribers see drops rather than blocking the actor.
+	o.handle.broadcast(EventBroadcast{
+		IssueID:    issueID,
+		Identifier: entry.Identifier,
+		Event:      ev,
 	})
 }
 
@@ -601,6 +676,7 @@ func (o *Orchestrator) shutdown() {
 		t.Stop()
 	}
 	o.workersWG.Wait()
+	o.handle.closeAllSubscribers()
 }
 
 func isInList(list []string, target string) bool {
