@@ -51,12 +51,25 @@ func (c *ServiceConfig) ValidateForDispatch() error {
 		if strings.TrimSpace(c.ClaudeCode.Command) == "" {
 			return &ConfigError{Code: ErrEmptyClaudeCodeCommand, Field: "claude_code.command"}
 		}
-	case BackendOpenAICompat, BackendAnthropicMessages:
-		// Reserved for the per-backend impl PR.
-		return &ConfigError{
-			Code:    ErrUnimplementedAgentBackend,
-			Field:   "agent.backend",
-			Message: string(c.Agent.Backend),
+	case BackendOpenAICompat:
+		if strings.TrimSpace(c.OpenAICompat.Endpoint) == "" {
+			return &ConfigError{Code: ErrInvalidValue, Field: "openai_compat.endpoint", Message: "is required"}
+		}
+		if strings.TrimSpace(c.OpenAICompat.APIKey) == "" {
+			return &ConfigError{Code: ErrInvalidValue, Field: "openai_compat.api_key", Message: "is required"}
+		}
+		if strings.TrimSpace(c.OpenAICompat.Model) == "" {
+			return &ConfigError{Code: ErrInvalidValue, Field: "openai_compat.model", Message: "is required"}
+		}
+	case BackendAnthropicMessages:
+		if strings.TrimSpace(c.AnthropicMessages.APIKey) == "" {
+			return &ConfigError{Code: ErrInvalidValue, Field: "anthropic_messages.api_key", Message: "is required"}
+		}
+		if strings.TrimSpace(c.AnthropicMessages.Model) == "" {
+			return &ConfigError{Code: ErrInvalidValue, Field: "anthropic_messages.model", Message: "is required"}
+		}
+		if c.AnthropicMessages.MaxTokens == 0 {
+			return &ConfigError{Code: ErrInvalidValue, Field: "anthropic_messages.max_tokens", Message: "is required (Anthropic 400s without it)"}
 		}
 	default:
 		return &ConfigError{
