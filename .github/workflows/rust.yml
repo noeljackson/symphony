@@ -2,9 +2,17 @@ name: rust
 
 on:
   pull_request:
+    paths:
+      - 'rust/**'
+      - 'docs/workflow.schema.json'
+      - '.github/workflows/rust.yml'
   push:
     branches:
       - main
+    paths:
+      - 'rust/**'
+      - 'docs/workflow.schema.json'
+      - '.github/workflows/rust.yml'
 
 jobs:
   test:
