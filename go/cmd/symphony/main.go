@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,8 @@ import (
 	codexbackend "github.com/noeljackson/symphony/go/internal/backend/codex"
 	openaibackend "github.com/noeljackson/symphony/go/internal/backend/openaicompat"
 	"github.com/noeljackson/symphony/go/internal/config"
+	"github.com/noeljackson/symphony/go/internal/doctor"
+	"github.com/noeljackson/symphony/go/internal/logsclient"
 	"github.com/noeljackson/symphony/go/internal/orchestrator"
 	"github.com/noeljackson/symphony/go/internal/prompt"
 	"github.com/noeljackson/symphony/go/internal/server"
@@ -43,16 +46,41 @@ import (
 const databaseURLEnv = "SYMPHONY_DATABASE_URL"
 
 func main() {
-	// -1 sentinel = "not set"; 0 = "ephemeral bind"; positive = explicit
-	// port. Uint can't represent the not-set case so we use signed int.
-	port := flag.Int("port", -1, "HTTP server port (overrides server.port). 0 requests an ephemeral bind for tests.")
-	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: symphony [--port N] [path-to-WORKFLOW.md]")
-		flag.PrintDefaults()
+	// Subcommand dispatch: `doctor` and `logs` are dispatched first so their
+	// flags don't collide with the daemon's `--port`. Anything else falls
+	// through to the daemon (the foundation behavior).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "doctor":
+			os.Exit(runDoctor(os.Args[2:]))
+		case "logs":
+			os.Exit(runLogs(os.Args[2:]))
+		case "-h", "--help", "help":
+			printUsage()
+			return
+		}
 	}
-	flag.Parse()
+	runDaemon(os.Args[1:])
+}
 
-	args := flag.Args()
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "usage: symphony [<subcommand>] [args...]")
+	fmt.Fprintln(os.Stderr, "subcommands:")
+	fmt.Fprintln(os.Stderr, "  (default)            run the orchestrator daemon")
+	fmt.Fprintln(os.Stderr, "  doctor [path]        run preflight + environment checks")
+	fmt.Fprintln(os.Stderr, "  logs <id> --url URL  tail per-issue agent activity")
+}
+
+func runDaemon(rawArgs []string) {
+	fs := flag.NewFlagSet("symphony", flag.ExitOnError)
+	port := fs.Int("port", -1, "HTTP server port (overrides server.port). 0 requests an ephemeral bind for tests.")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: symphony [--port N] [path-to-WORKFLOW.md]")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(rawArgs)
+
+	args := fs.Args()
 	path := "./WORKFLOW.md"
 	if len(args) > 0 {
 		path = args[0]
@@ -65,6 +93,58 @@ func main() {
 		fmt.Fprintf(os.Stderr, "symphony: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runDoctor(rawArgs []string) int {
+	fs := flag.NewFlagSet("symphony doctor", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: symphony doctor [path-to-WORKFLOW.md]")
+	}
+	_ = fs.Parse(rawArgs)
+	args := fs.Args()
+	path := "./WORKFLOW.md"
+	if len(args) > 0 {
+		path = args[0]
+	}
+	code, err := doctor.Run(context.Background(), path, os.Stdout)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "symphony doctor: %v\n", err)
+		return 2
+	}
+	return code
+}
+
+func runLogs(rawArgs []string) int {
+	fs := flag.NewFlagSet("symphony logs", flag.ExitOnError)
+	url := fs.String("url", "", "HTTP URL of the running orchestrator (required)")
+	noFollow := fs.Bool("no-follow", false, "print backfill from /api/v1/<id> and exit")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: symphony logs <issue-identifier> --url URL [--no-follow]")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(rawArgs)
+	args := fs.Args()
+	if len(args) < 1 {
+		fs.Usage()
+		return 2
+	}
+	if strings.TrimSpace(*url) == "" {
+		fmt.Fprintln(os.Stderr, "symphony logs: --url is required")
+		return 2
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	code, err := logsclient.Run(ctx, logsclient.Args{
+		Identifier: args[0],
+		URL:        *url,
+		Follow:     !*noFollow,
+	}, os.Stdout, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "symphony logs: %v\n", err)
+		return 2
+	}
+	return code
 }
 
 func run(ctx context.Context, workflowPath string, portOverride int, logger *slog.Logger) error {
