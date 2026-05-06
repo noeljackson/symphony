@@ -526,9 +526,17 @@ func (o *Orchestrator) runWorker(ctx context.Context, i issue.Issue, attempt *ui
 	defer o.workersWG.Done()
 	outcome := o.runner.Run(ctx, i, attempt, events)
 	close(events)
+	// Always try to deliver cmdWorkerExit so the actor can clean up
+	// state and schedule a retry. Watching ctx.Done() here is incorrect:
+	// when SPEC §8.5 stall detection cancels the per-worker ctx, ctx is
+	// already Done before we get here, and a select racing the channel
+	// send against ctx.Done() will sometimes drop the exit on the floor.
+	// The 5s timeout is the shutdown-deadlock guard: if the actor's run
+	// loop has already returned, no one drains cmd, and we'd block
+	// forever otherwise.
 	select {
 	case o.cmd <- cmdWorkerExit{IssueID: i.ID, Outcome: outcome}:
-	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
 	}
 }
 
