@@ -365,7 +365,7 @@ func TestReloadHotSwapsActorFacingFields(t *testing.T) {
 	newCfg.Agent.DailyBudgetUSD = &cap
 	newCfg.Agent.MaxRetryBackoffMS = 600_000
 
-	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg})
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg}, ReloadComponents{})
 	if out.Err != nil {
 		t.Fatalf("reload err: %v", out.Err)
 	}
@@ -411,7 +411,7 @@ func TestReloadRejectsInvalidConfig(t *testing.T) {
 	bad := makeConfig(2)
 	bad.Linear.APIKey = ""
 
-	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: bad})
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: bad}, ReloadComponents{})
 	if out.Err == nil {
 		t.Fatal("expected validation err")
 	}
@@ -424,8 +424,8 @@ func TestReloadRejectsInvalidConfig(t *testing.T) {
 }
 
 // TestReloadFlagsRestartRequiredFields ensures a backend swap surfaces
-// in the Restart flag — the constructor closed over the old backend at
-// boot time, so the operator must restart.
+// in the Restart flag when the caller did NOT supply a rebuilt runner —
+// the actor's old o.runner is still in place.
 func TestReloadFlagsRestartRequiredFields(t *testing.T) {
 	cfg := makeConfig(2)
 	tr := tracker.NewMemoryTracker(nil)
@@ -438,7 +438,7 @@ func TestReloadFlagsRestartRequiredFields(t *testing.T) {
 	newCfg.ClaudeCode = config.ClaudeCodeConfig{Command: "claude --print"}
 	newCfg.Codex = config.CodexConfig{} // zero out so ValidateForDispatch only checks claude_code
 
-	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg})
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg}, ReloadComponents{})
 	if out.Err != nil {
 		t.Fatalf("reload err: %v", out.Err)
 	}
@@ -446,6 +446,65 @@ func TestReloadFlagsRestartRequiredFields(t *testing.T) {
 		t.Fatal("expected Applied=true even when Restart=true")
 	}
 	if !out.Restart {
-		t.Fatal("expected Restart=true on backend change")
+		t.Fatal("expected Restart=true on backend change without component swap")
 	}
+}
+
+// TestReloadSwapsTrackerAndRunner exercises the SPEC §6.2 component-
+// rebuild path: the caller supplies a fresh tracker and runner, the
+// actor swaps them in, and Restart=false because every restart-
+// required field has a rebuilt component to honor it. The next
+// dispatch picks up the new runner; in-flight workers continue on the
+// runner that was active at their dispatch time.
+func TestReloadSwapsTrackerAndRunner(t *testing.T) {
+	cfg := makeConfig(2)
+	tr := tracker.NewMemoryTracker([]issue.Issue{mkIssue("a", "MT-1", "Todo")})
+	runnerA := newScriptedRunner(nil)
+	h, _, shutdown := bootActor(t, cfg, tr, runnerA)
+	defer shutdown()
+
+	// First tick → worker A starts on runnerA; gate keeps it alive.
+	ctx := context.Background()
+	h.Tick(ctx)
+	waitForCondition(t, "first dispatch on runner A", func() bool {
+		return runnerA.dispatchedCount() == 1
+	})
+
+	// Reload with a brand-new runner + tracker. The new tracker has a
+	// second issue queued so the next tick has fresh work.
+	newCfg := makeConfig(2)
+	newCfg.Agent.Backend = config.BackendClaudeCode
+	newCfg.ClaudeCode = config.ClaudeCodeConfig{Command: "claude --print"}
+	newCfg.Codex = config.CodexConfig{}
+	runnerB := newScriptedRunner(nil)
+	trB := tracker.NewMemoryTracker([]issue.Issue{mkIssue("b", "MT-2", "Todo")})
+	out := h.Reload(ctx, &config.WorkflowDefinition{Config: newCfg}, ReloadComponents{
+		Tracker: trB,
+		Runner:  runnerB,
+	})
+	if out.Err != nil {
+		t.Fatalf("reload err: %v", out.Err)
+	}
+	if !out.SwappedTracker || !out.SwappedRunner {
+		t.Fatalf("expected SwappedTracker && SwappedRunner; got %+v", out)
+	}
+	if out.Restart {
+		t.Fatalf("Restart should be false when components cover the gap; got %+v", out)
+	}
+
+	// Trigger a fresh tick. The new tracker yields MT-2; the new runner
+	// receives it. In-flight worker on runnerA stays put — gate is closed.
+	h.Tick(ctx)
+	waitForCondition(t, "second dispatch on runner B", func() bool {
+		return runnerB.dispatchedCount() == 1
+	})
+	// runnerA must not have picked up MT-2.
+	for _, name := range runnerA.dispatchedNames() {
+		if name == "MT-2" {
+			t.Fatalf("runner A unexpectedly received MT-2 after swap: %v", runnerA.dispatchedNames())
+		}
+	}
+	// Release the in-flight worker on runner A so shutdown completes promptly.
+	runnerA.release()
+	runnerB.release()
 }
