@@ -40,10 +40,33 @@ type cmdAgentUpdate struct {
 }
 type cmdRetryFire struct{ IssueID string }
 type cmdSnapshot struct{ Reply chan<- Snapshot }
+
+// cmdReload swaps the orchestrator's actor-facing config knobs (polling
+// cadence, concurrency caps, budget cap, retry backoff, hook scripts and
+// timeout) per SPEC §6.2. Backend / tracker / prompt template / workspace
+// root require a process restart to change because their constructors
+// closed over the old values; the SPEC explicitly allows this
+// ("Implementations are not REQUIRED to restart in-flight agent
+// sessions automatically when config changes.").
+type cmdReload struct {
+	Definition *config.WorkflowDefinition
+	Reply      chan<- ReloadOutcome
+}
 type cmdShutdown struct{}
+
+// ReloadOutcome is the reply the actor sends back after handling cmdReload.
+// SPEC §6.2: invalid reloads MUST NOT crash; the orchestrator keeps the
+// last-known-good config and the caller logs the err.
+type ReloadOutcome struct {
+	Applied  bool
+	Err      error
+	Restart  bool     // set when the new config differs in fields that need a process restart.
+	Affected []string // list of keys that DID hot-swap (for operator-visible logs).
+}
 
 func (cmdTick) commandTag()        {}
 func (cmdWorkerExit) commandTag()  {}
+func (cmdReload) commandTag()      {}
 func (cmdAgentUpdate) commandTag() {}
 func (cmdRetryFire) commandTag()   {}
 func (cmdSnapshot) commandTag()    {}
@@ -217,6 +240,26 @@ func (h *Handle) Tick(ctx context.Context) {
 	select {
 	case h.cmd <- cmdTick{}:
 	case <-ctx.Done():
+	}
+}
+
+// Reload asks the actor to swap its actor-facing config knobs to the
+// values in def (SPEC §6.2). The returned ReloadOutcome reports which
+// keys hot-swapped, whether any restart-required keys also changed, and
+// any preflight error. If ctx is cancelled before the actor replies, an
+// outcome with Err set is returned.
+func (h *Handle) Reload(ctx context.Context, def *config.WorkflowDefinition) ReloadOutcome {
+	reply := make(chan ReloadOutcome, 1)
+	select {
+	case h.cmd <- cmdReload{Definition: def, Reply: reply}:
+	case <-ctx.Done():
+		return ReloadOutcome{Err: ctx.Err()}
+	}
+	select {
+	case out := <-reply:
+		return out
+	case <-ctx.Done():
+		return ReloadOutcome{Err: ctx.Err()}
 	}
 }
 
@@ -456,7 +499,218 @@ func (o *Orchestrator) handleCommand(ctx context.Context, cmd Command) {
 		o.handleRetryFire(ctx, c.IssueID)
 	case cmdSnapshot:
 		c.Reply <- o.snapshot()
+	case cmdReload:
+		c.Reply <- o.handleReload(c.Definition)
 	}
+}
+
+// handleReload swaps the actor's *config.ServiceConfig to the validated
+// one in def, mirrors the changed values on OrchestratorState, and
+// reports back which fields hot-swapped. Restart-required keys (tracker
+// auth/endpoint, agent.backend, per-backend command/endpoint, workspace
+// root, hooks, server.port) are listed in the outcome so the caller can
+// log a "restart needed for full effect" warning per SPEC §6.2.
+func (o *Orchestrator) handleReload(def *config.WorkflowDefinition) ReloadOutcome {
+	if def == nil {
+		return ReloadOutcome{Err: fmt.Errorf("nil workflow definition")}
+	}
+	newCfg := def.Config
+	if err := newCfg.ValidateForDispatch(); err != nil {
+		return ReloadOutcome{Err: fmt.Errorf("validate: %w", err)}
+	}
+	affected, restart := diffConfig(o.cfg, newCfg)
+
+	// Swap the cfg pointer atomically from the actor's perspective —
+	// nothing else races against o.cfg because every read happens on
+	// this goroutine.
+	o.cfg = newCfg
+	o.state.PollIntervalMS = newCfg.Polling.IntervalMS
+	o.state.MaxConcurrentAgents = newCfg.Agent.MaxConcurrentAgents
+
+	if len(affected) > 0 || len(restart) > 0 {
+		o.logger.Info("workflow reload applied",
+			slog.Any("hot_swapped", affected),
+			slog.Any("restart_required", restart))
+	}
+	return ReloadOutcome{
+		Applied:  true,
+		Affected: affected,
+		Restart:  len(restart) > 0,
+	}
+}
+
+// diffConfig returns (hotSwapped, restartRequired) — keys that are
+// observably different between the old and new config, split by whether
+// the field can take effect via a cfg-pointer swap or whether it needs
+// a process restart because some constructor closed over the old value.
+func diffConfig(oldCfg, newCfg *config.ServiceConfig) (hot, restart []string) {
+	if oldCfg == nil || newCfg == nil {
+		return nil, nil
+	}
+	// Hot-swappable: orchestrator reads these from o.cfg every tick.
+	if oldCfg.Polling.IntervalMS != newCfg.Polling.IntervalMS {
+		hot = append(hot, "polling.interval_ms")
+	}
+	if oldCfg.Agent.MaxConcurrentAgents != newCfg.Agent.MaxConcurrentAgents {
+		hot = append(hot, "agent.max_concurrent_agents")
+	}
+	if oldCfg.Agent.MaxRetryBackoffMS != newCfg.Agent.MaxRetryBackoffMS {
+		hot = append(hot, "agent.max_retry_backoff_ms")
+	}
+	if !floatPtrEq(oldCfg.Agent.DailyBudgetUSD, newCfg.Agent.DailyBudgetUSD) {
+		hot = append(hot, "agent.daily_budget_usd")
+	}
+	if !mapStringIntEq(oldCfg.Agent.MaxConcurrentAgentsByState, newCfg.Agent.MaxConcurrentAgentsByState) {
+		hot = append(hot, "agent.max_concurrent_agents_by_state")
+	}
+	if !sliceStringEq(oldCfg.Tracker.TerminalStates, newCfg.Tracker.TerminalStates) {
+		hot = append(hot, "tracker.terminal_states")
+	}
+	if oldCfg.Codex.StallTimeoutMS != newCfg.Codex.StallTimeoutMS {
+		hot = append(hot, "codex.stall_timeout_ms")
+	}
+	if oldCfg.ClaudeCode.StallTimeoutMS != newCfg.ClaudeCode.StallTimeoutMS {
+		hot = append(hot, "claude_code.stall_timeout_ms")
+	}
+	// Restart-required: tracker / backend / workspace / hooks / server
+	// constructors closed over the old values at boot time.
+	if oldCfg.Tracker.Kind != newCfg.Tracker.Kind {
+		restart = append(restart, "tracker.kind")
+	}
+	if !sliceStringEq(oldCfg.Tracker.ActiveStates, newCfg.Tracker.ActiveStates) {
+		restart = append(restart, "tracker.active_states")
+	}
+	if oldCfg.Linear != newCfg.Linear {
+		restart = append(restart, "linear.*")
+	}
+	if !githubEq(oldCfg.GitHub, newCfg.GitHub) {
+		restart = append(restart, "github.*")
+	}
+	if oldCfg.Agent.Backend != newCfg.Agent.Backend {
+		restart = append(restart, "agent.backend")
+	}
+	if oldCfg.Agent.MaxTurns != newCfg.Agent.MaxTurns {
+		restart = append(restart, "agent.max_turns")
+	}
+	if !codexEq(oldCfg.Codex, newCfg.Codex) {
+		restart = append(restart, "codex.*")
+	}
+	if !claudeCodeEq(oldCfg.ClaudeCode, newCfg.ClaudeCode) {
+		restart = append(restart, "claude_code.*")
+	}
+	if oldCfg.OpenAICompat != newCfg.OpenAICompat {
+		restart = append(restart, "openai_compat.*")
+	}
+	if oldCfg.AnthropicMessages != newCfg.AnthropicMessages {
+		restart = append(restart, "anthropic_messages.*")
+	}
+	if oldCfg.Workspace.Root != newCfg.Workspace.Root {
+		restart = append(restart, "workspace.root")
+	}
+	if !hooksEq(oldCfg.Hooks, newCfg.Hooks) {
+		restart = append(restart, "hooks.*")
+	}
+	if !uint16PtrEq(oldCfg.Server.Port, newCfg.Server.Port) {
+		restart = append(restart, "server.port")
+	}
+	return hot, restart
+}
+
+func floatPtrEq(a, b *float64) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
+}
+
+func uint16PtrEq(a, b *uint16) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
+}
+
+func strPtrEq(a, b *string) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
+}
+
+func sliceStringEq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func mapStringIntEq(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
+}
+
+func githubEq(a, b config.GitHubConfig) bool {
+	if a.Endpoint != b.Endpoint || a.Owner != b.Owner || a.Repo != b.Repo ||
+		a.APIToken != b.APIToken || a.AppID != b.AppID ||
+		a.AppInstallationID != b.AppInstallationID || a.PrivateKey != b.PrivateKey ||
+		a.Assignee != b.Assignee {
+		return false
+	}
+	return mapStringIntEq(a.LabelPriorityMap, b.LabelPriorityMap)
+}
+
+func codexEq(a, b config.CodexConfig) bool {
+	// ApprovalPolicy / ThreadSandbox / TurnSandboxPolicy are `any`; treat
+	// them as restart-required iff scalar fields differ. The Raw pass-
+	// through values flow through cfg.Codex directly so a deep compare via
+	// reflection is overkill here — operators who change those will see
+	// differing scalar fields too in practice.
+	return a.Command == b.Command &&
+		a.TurnTimeoutMS == b.TurnTimeoutMS &&
+		a.ReadTimeoutMS == b.ReadTimeoutMS &&
+		a.StallTimeoutMS == b.StallTimeoutMS
+}
+
+func claudeCodeEq(a, b config.ClaudeCodeConfig) bool {
+	if a.Command != b.Command || a.PermissionMode != b.PermissionMode ||
+		a.Model != b.Model || a.TurnTimeoutMS != b.TurnTimeoutMS ||
+		a.ReadTimeoutMS != b.ReadTimeoutMS || a.StallTimeoutMS != b.StallTimeoutMS {
+		return false
+	}
+	return sliceStringEq(a.AllowedTools, b.AllowedTools) &&
+		sliceStringEq(a.DisallowedTools, b.DisallowedTools)
+}
+
+func hooksEq(a, b config.HooksConfig) bool {
+	return strPtrEq(a.AfterCreate, b.AfterCreate) &&
+		strPtrEq(a.BeforeRun, b.BeforeRun) &&
+		strPtrEq(a.AfterRun, b.AfterRun) &&
+		strPtrEq(a.BeforeRemove, b.BeforeRemove) &&
+		a.TimeoutMS == b.TimeoutMS
 }
 
 func (o *Orchestrator) runTick(ctx context.Context) {

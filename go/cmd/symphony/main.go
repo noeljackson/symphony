@@ -41,6 +41,7 @@ import (
 	"github.com/noeljackson/symphony/go/internal/tracker"
 	"github.com/noeljackson/symphony/go/internal/tracker/github"
 	"github.com/noeljackson/symphony/go/internal/tracker/linear"
+	"github.com/noeljackson/symphony/go/internal/watcher"
 	"github.com/noeljackson/symphony/go/internal/workspace"
 )
 
@@ -212,6 +213,10 @@ func run(ctx context.Context, workflowPath string, portOverride int, logger *slo
 		return err
 	}
 
+	// SPEC §6.2: hot-reload on WORKFLOW.md change. Watcher failures are
+	// non-fatal — the orchestrator keeps running with the boot-time cfg.
+	startWorkflowWatcher(runCtx, def.Path, h, logger)
+
 	// First tick fires immediately; the auto-scheduler keeps it going.
 	h.Tick(runCtx)
 
@@ -354,6 +359,40 @@ func derefStr(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// startWorkflowWatcher subscribes to filesystem changes on path and
+// forwards each successful reload to the orchestrator (SPEC §6.2).
+// Validation errors are logged at warn level; the orchestrator keeps
+// running with the last-known-good config per SPEC §6.2.
+func startWorkflowWatcher(ctx context.Context, path string, h *orchestrator.Handle, logger *slog.Logger) {
+	events, err := watcher.Watch(ctx, path)
+	if err != nil {
+		logger.Warn("workflow watcher disabled", slog.String("path", path), slog.String("err", err.Error()))
+		return
+	}
+	go func() {
+		logger.Info("workflow watcher started", slog.String("path", path))
+		for ev := range events {
+			if ev.Err != nil {
+				logger.Warn("workflow reload failed; keeping last-known-good config",
+					slog.String("err", ev.Err.Error()))
+				continue
+			}
+			outcome := h.Reload(ctx, ev.Definition)
+			if outcome.Err != nil {
+				logger.Warn("workflow reload rejected by orchestrator",
+					slog.String("err", outcome.Err.Error()))
+				continue
+			}
+			logger.Info("workflow reload applied",
+				slog.Any("hot_swapped", outcome.Affected),
+				slog.Bool("restart_required", outcome.Restart))
+			if outcome.Restart {
+				logger.Warn("some workflow keys changed but require a process restart to take full effect")
+			}
+		}
+	}()
 }
 
 // Compile-time check: filepath.Clean is used implicitly via config.Workspace.Root.
