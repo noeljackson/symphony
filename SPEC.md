@@ -1114,6 +1114,27 @@ Part A: Stall detection
   of `agent.backend`), terminate the worker and queue a retry.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
+When stall is detected, the orchestrator MUST:
+
+1. Cancel the worker's per-attempt context (the same `ctx` the worker
+   runner accepted in its `Run` call). Implementations SHOULD propagate
+   this cancellation to any in-flight subprocess (SIGINT/SIGTERM) or
+   HTTP request so the worker exits promptly rather than running to
+   completion in the background.
+2. Wait for the worker to return. Its outcome SHOULD be a failure with
+   `error == "stall_timeout"`; the orchestrator treats any return value
+   as an acknowledgment of the cancellation.
+3. Convert the cancelled run to a retry attempt under the standard
+   §8.4 exponential-backoff schedule. The associated `RetryEntry.error`
+   MUST be set to `"stall_timeout"` regardless of what the worker
+   actually returned, so operators can distinguish stall-driven
+   retries from organic failures in `agent_session_logs` and the
+   §13.7.2 retry view.
+
+Stall-driven retries consume the same attempt counter as failure-driven
+retries; an issue that stalls repeatedly walks up the same exponential
+backoff capped by `agent.max_retry_backoff_ms`.
+
 Part B: Tracker state refresh
 
 - Fetch current issue states for all running issue IDs.
