@@ -97,7 +97,15 @@ body
 // openai-compatible servers, asks it to bind an HTTP server on an
 // ephemeral port, polls /api/v1/state to confirm the runtime is alive,
 // then sends SIGTERM and waits for clean exit.
+//
+// Gated behind SYMPHONY_RUN_E2E=1 (per AGENTS.md "Real Integration
+// Profile" rule): CI runners without the env var report this as
+// SKIPPED rather than running the full subprocess + HTTP exchange.
+// Local runs invoke it explicitly.
 func TestSymphonyEndToEnd(t *testing.T) {
+	if os.Getenv("SYMPHONY_RUN_E2E") == "" {
+		t.Skip("set SYMPHONY_RUN_E2E=1 to run the end-to-end binary smoke test")
+	}
 	bin := ensureBinary(t)
 
 	// Fake Linear server — returns one Todo issue.
