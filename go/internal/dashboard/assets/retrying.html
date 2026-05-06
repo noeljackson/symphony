@@ -1,0 +1,24 @@
+<section id="retrying" class="card">
+<header>
+  <h2>Retrying <span class="count">{{.Counts.Retrying}}</span></h2>
+</header>
+{{if eq (len .Retrying) 0}}
+  <p class="empty">No retries pending.</p>
+{{else}}
+<table>
+  <thead>
+    <tr><th>Issue</th><th>Attempt</th><th>Due in</th><th>Error</th></tr>
+  </thead>
+  <tbody>
+    {{range .Retrying}}
+    <tr>
+      <td>{{.IssueIdentifier}}</td>
+      <td>#{{.Attempt}}</td>
+      <td>{{.DueIn}}</td>
+      <td class="error">{{.Error}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+</section>

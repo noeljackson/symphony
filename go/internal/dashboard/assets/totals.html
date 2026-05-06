@@ -1,0 +1,11 @@
+<section id="totals" class="card">
+<header><h2>Agent totals</h2></header>
+<dl>
+  <div><dt>Input tokens</dt><dd>{{.Totals.InputTokens}}</dd></div>
+  <div><dt>Output tokens</dt><dd>{{.Totals.OutputTokens}}</dd></div>
+  <div><dt>Total tokens</dt><dd>{{.Totals.TotalTokens}}</dd></div>
+  <div><dt>Seconds running</dt><dd>{{printf "%.1f" .Totals.SecondsRunning}}</dd></div>
+  <div><dt>Cost (today)</dt><dd>{{.Totals.CostUSDToday}}</dd></div>
+  <div><dt>Cost (lifetime)</dt><dd>{{.Totals.CostUSD}}</dd></div>
+</dl>
+</section>

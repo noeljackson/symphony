@@ -1,0 +1,32 @@
+<section id="running" class="card">
+<header>
+  <h2>Running <span class="count">{{.Counts.Running}}</span></h2>
+</header>
+{{if eq (len .Running) 0}}
+  <p class="empty">No agents running right now.</p>
+{{else}}
+<table>
+  <thead>
+    <tr>
+      <th>Issue</th><th>State</th><th>Turns</th><th>Last event</th>
+      <th>Tokens</th><th>Started</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Running}}
+    <tr>
+      <td>{{.IssueIdentifier}}</td>
+      <td>{{.State}}</td>
+      <td>{{.TurnCount}}</td>
+      <td>
+        <div class="last-event">{{.LastEvent}}</div>
+        {{if .LastMessage}}<div class="last-message">{{.LastMessage}}</div>{{end}}
+      </td>
+      <td class="tokens">{{.InputTokens}} in / {{.OutputTokens}} out</td>
+      <td>{{.StartedAt}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}
+</section>

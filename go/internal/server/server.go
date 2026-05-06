@@ -27,11 +27,22 @@ type HTTPServer struct {
 	listener net.Listener
 }
 
+// Option mounts additional routes alongside the §13.7 JSON API. The
+// canonical use case is the dashboard ([WithDashboard] passed via
+// cmd/symphony) but tests can register their own probes too.
+type Option func(mux *http.ServeMux, handle *orchestrator.Handle)
+
 // New constructs a server bound to addr. Use addr=":0" for an ephemeral
 // port; the actual port is discoverable via [HTTPServer.Addr] after Start.
-func New(addr string, handle *orchestrator.Handle) (*HTTPServer, error) {
+//
+// Variadic [Option]s register additional routes after the core
+// §13.7 endpoints. They run in declaration order.
+func New(addr string, handle *orchestrator.Handle, opts ...Option) (*HTTPServer, error) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, handle)
+	for _, opt := range opts {
+		opt(mux, handle)
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", addr, err)

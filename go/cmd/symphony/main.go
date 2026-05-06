@@ -30,6 +30,7 @@ import (
 	codexbackend "github.com/noeljackson/symphony/go/internal/backend/codex"
 	openaibackend "github.com/noeljackson/symphony/go/internal/backend/openaicompat"
 	"github.com/noeljackson/symphony/go/internal/config"
+	"github.com/noeljackson/symphony/go/internal/dashboard"
 	"github.com/noeljackson/symphony/go/internal/doctor"
 	"github.com/noeljackson/symphony/go/internal/logsclient"
 	"github.com/noeljackson/symphony/go/internal/orchestrator"
@@ -335,7 +336,7 @@ func maybeStartHTTPServer(
 		return nil, nil
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	srv, err := server.New(addr, h)
+	srv, err := server.New(addr, h, server.Option(dashboard.Mount))
 	if err != nil {
 		return nil, fmt.Errorf("start http server: %w", err)
 	}
