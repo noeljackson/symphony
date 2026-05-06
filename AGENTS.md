@@ -137,7 +137,17 @@ cargo test -p symphony-tracker --test live_linear -- --ignored
 
 # Elixir
 SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_e2e_test.exs
+
+# Go
+SYMPHONY_RUN_LIVE_E2E=1 LINEAR_API_KEY=... LINEAR_PROJECT_SLUG=... \
+    go test ./internal/tracker/linear -run Live -v
 ```
+
+The Go convention: `SYMPHONY_RUN_LIVE_E2E=1` opts in to the live
+profile; without it, live tests `t.Skip` with a clear message. With
+the gate set but a required credential missing, the test `t.Fatal`s
+so an operator who explicitly opted in sees a hard error rather than
+silent green.
 
 ## Safety rails
 
