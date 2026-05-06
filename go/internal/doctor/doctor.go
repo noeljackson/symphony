@@ -215,4 +215,3 @@ func trackerAuthCheck(ctx context.Context, cfg *config.ServiceConfig) Result {
 	_ = conn.Close()
 	return Result{Name: "tracker endpoint reachable", Pass: true, Detail: endpoint}
 }
-
