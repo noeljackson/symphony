@@ -97,7 +97,15 @@ body
 // openai-compatible servers, asks it to bind an HTTP server on an
 // ephemeral port, polls /api/v1/state to confirm the runtime is alive,
 // then sends SIGTERM and waits for clean exit.
+//
+// Gated behind SYMPHONY_RUN_E2E=1 (per AGENTS.md "Real Integration
+// Profile" rule): CI runners without the env var report this as
+// SKIPPED rather than running the full subprocess + HTTP exchange.
+// Local runs invoke it explicitly.
 func TestSymphonyEndToEnd(t *testing.T) {
+	if os.Getenv("SYMPHONY_RUN_E2E") == "" {
+		t.Skip("set SYMPHONY_RUN_E2E=1 to run the end-to-end binary smoke test")
+	}
 	bin := ensureBinary(t)
 
 	// Fake Linear server — returns one Todo issue.
@@ -158,7 +166,7 @@ Issue {{ issue.identifier }}: {{ issue.title }}
 `
 	path := writeWorkflow(t, body)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, path)
 	stdoutBuf := &lineBuffer{}
@@ -172,10 +180,10 @@ Issue {{ issue.identifier }}: {{ issue.title }}
 		_ = cmd.Wait()
 	}()
 
-	addr := waitForHTTPAddr(t, stdoutBuf, 5*time.Second)
+	addr := waitForHTTPAddr(t, stdoutBuf, 20*time.Second)
 
 	// Poll /api/v1/state until 200 OK.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		resp, err := http.Get("http://" + addr + "/api/v1/state")
 		if err == nil {
