@@ -83,6 +83,60 @@ type Snapshot struct {
 	AgentTotals state.AgentTotals
 }
 
+// detectStalls implements SPEC §8.5 Part A. For each running entry whose
+// elapsed-since-last-event exceeds the configured stall_timeout_ms, mark
+// the issue as stalled and cancel its worker context. The worker observes
+// ctx.Done() and returns; handleWorkerExit then converts to a retry with
+// RetryEntry.error == "stall_timeout".
+//
+// Looks up the per-backend `stall_timeout_ms`. When <= 0 stall detection
+// is disabled (SPEC §5.3.6).
+func (o *Orchestrator) detectStalls() {
+	stallMS := o.stallTimeoutMS()
+	if stallMS <= 0 {
+		return
+	}
+	stall := time.Duration(stallMS) * time.Millisecond
+	now := time.Now()
+	for id, entry := range o.state.Running {
+		if _, already := o.stalledIDs[id]; already {
+			continue
+		}
+		var since time.Time
+		if entry.Session.LastAgentTimestampMonotone != nil {
+			since = *entry.Session.LastAgentTimestampMonotone
+		} else {
+			since = entry.StartedMonotone
+		}
+		if now.Sub(since) <= stall {
+			continue
+		}
+		o.logger.Warn("stall detected",
+			slog.String("identifier", entry.Identifier),
+			slog.Duration("elapsed", now.Sub(since)),
+			slog.Duration("limit", stall))
+		o.stalledIDs[id] = struct{}{}
+		if cancel, ok := o.workerCancels[id]; ok {
+			cancel()
+		}
+	}
+}
+
+// stallTimeoutMS returns the per-backend stall timeout. When the
+// configured backend's value is unset or zero, the SPEC §5.3.6 default
+// of 300_000ms applies.
+func (o *Orchestrator) stallTimeoutMS() int64 {
+	switch o.cfg.Agent.Backend {
+	case config.BackendCodex:
+		return o.cfg.Codex.StallTimeoutMS
+	case config.BackendClaudeCode:
+		return o.cfg.ClaudeCode.StallTimeoutMS
+	}
+	// HTTP backends (openai_compat, anthropic_messages) don't expose a
+	// stall_timeout knob in v1 — the per-attempt turn_timeout is enough.
+	return 0
+}
+
 // EventBroadcast is one envelope sent on each [Handle.SubscribeEvents] channel
 // when the actor records a new agent update.
 type EventBroadcast struct {
@@ -95,6 +149,12 @@ type EventBroadcast struct {
 // fall behind by more than this number of events get drops on the floor —
 // callers SHOULD re-snapshot to recover (SPEC §13.7.4).
 const EventChannelCapacity = 64
+
+// stallTimeoutSentinel is the SPEC §8.5 RetryEntry.error value the
+// orchestrator writes when stall detection cancels a worker. Keeping it
+// stable means observability surfaces (dashboard, symphony logs,
+// /api/v1/<id>.retry) can match against a single string.
+const stallTimeoutSentinel = "stall_timeout"
 
 // Handle is the public surface for talking to the actor.
 type Handle struct {
@@ -211,6 +271,17 @@ type Orchestrator struct {
 	// in-flight workers; their goroutines feed back via cmd.
 	workersWG sync.WaitGroup
 
+	// per-worker context cancel funcs, indexed by issue ID. Used by
+	// SPEC §8.5 stall detection to cancel a stuck attempt; cleaned up
+	// in handleWorkerExit.
+	workerCancels map[string]context.CancelFunc
+
+	// SPEC §8.5: when stall detection cancels a worker, the issue is
+	// added here so handleWorkerExit knows to override the retry's
+	// error to the sentinel "stall_timeout" regardless of what the
+	// runner actually returned.
+	stalledIDs map[string]struct{}
+
 	// retry timers indexed by issue ID; cancelled on dispatch / shutdown.
 	retryTimers map[string]*time.Timer
 
@@ -250,6 +321,8 @@ func New(cfg *config.ServiceConfig, tr tracker.Tracker, runner WorkerRunner, st 
 		handle:               h,
 		logger:               logger,
 		retryTimers:          map[string]*time.Timer{},
+		workerCancels:        map[string]context.CancelFunc{},
+		stalledIDs:           map[string]struct{}{},
 		autoSchedule:         opts.AutoSchedule,
 		skipRestartReconcile: opts.SkipRestartReconcile,
 	}
@@ -391,6 +464,10 @@ func (o *Orchestrator) runTick(ctx context.Context) {
 
 	state.RollOverDailyCost(o.state, time.Now())
 
+	// SPEC §8.5 Part A: stall detection runs at the head of every tick
+	// so a stuck worker is cancelled before we consider new dispatches.
+	o.detectStalls()
+
 	if err := o.cfg.ValidateForDispatch(); err != nil {
 		o.logger.Warn("dispatch preflight failed", slog.String("err", err.Error()))
 		return
@@ -434,19 +511,32 @@ func (o *Orchestrator) dispatch(ctx context.Context, i issue.Issue, attempt *uin
 	}
 	o.state.Running[i.ID] = entry
 
+	// SPEC §8.5: each worker gets its own derived context so stall
+	// detection can cancel it without tearing down the whole actor.
+	workerCtx, cancel := context.WithCancel(ctx)
+	o.workerCancels[i.ID] = cancel
+
 	events := make(chan AgentEvent, 64)
 	o.workersWG.Add(1)
-	go o.runWorker(ctx, i, attempt, events)
-	go o.fanoutEvents(ctx, i.ID, events)
+	go o.runWorker(workerCtx, i, attempt, events)
+	go o.fanoutEvents(workerCtx, i.ID, events)
 }
 
 func (o *Orchestrator) runWorker(ctx context.Context, i issue.Issue, attempt *uint32, events chan AgentEvent) {
 	defer o.workersWG.Done()
 	outcome := o.runner.Run(ctx, i, attempt, events)
 	close(events)
+	// Always try to deliver cmdWorkerExit so the actor can clean up
+	// state and schedule a retry. Watching ctx.Done() here is incorrect:
+	// when SPEC §8.5 stall detection cancels the per-worker ctx, ctx is
+	// already Done before we get here, and a select racing the channel
+	// send against ctx.Done() will sometimes drop the exit on the floor.
+	// The 5s timeout is the shutdown-deadlock guard: if the actor's run
+	// loop has already returned, no one drains cmd, and we'd block
+	// forever otherwise.
 	select {
 	case o.cmd <- cmdWorkerExit{IssueID: i.ID, Outcome: outcome}:
-	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
 	}
 }
 
@@ -493,6 +583,21 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, issueID string, out
 	entry, ok := o.state.Running[issueID]
 	if !ok {
 		return
+	}
+	// Release the per-worker cancel func; future stall-detect ticks
+	// must not see a stale entry.
+	if cancel, ok := o.workerCancels[issueID]; ok {
+		cancel()
+		delete(o.workerCancels, issueID)
+	}
+	// SPEC §8.5: if this exit was driven by stall-detection
+	// cancellation, override the outcome's error to the sentinel
+	// regardless of what the runner actually returned. This gives
+	// operators a stable signal in /api/v1/<id>.retry and recent_events.
+	if _, stalled := o.stalledIDs[issueID]; stalled {
+		outcome.Kind = WorkerOutcomeFailure
+		outcome.Error = stallTimeoutSentinel
+		delete(o.stalledIDs, issueID)
 	}
 	delete(o.state.Running, issueID)
 	delete(o.state.Claimed, issueID)
