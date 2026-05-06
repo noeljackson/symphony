@@ -347,3 +347,105 @@ func (r *stallRunner) Run(ctx context.Context, _ issue.Issue, _ *uint32, _ chan<
 	<-ctx.Done()
 	return WorkerOutcome{Kind: WorkerOutcomeFailure, Error: "ctx cancelled"}
 }
+
+// TestReloadHotSwapsActorFacingFields exercises SPEC §6.2: a valid
+// reload changes polling cadence, concurrency cap, and daily-budget
+// without restarting workers, and reports those keys in Affected.
+func TestReloadHotSwapsActorFacingFields(t *testing.T) {
+	cfg := makeConfig(2)
+	cfg.Polling.IntervalMS = 30_000
+	tr := tracker.NewMemoryTracker(nil)
+	runner := newScriptedRunner(nil)
+	h, o, shutdown := bootActor(t, cfg, tr, runner)
+	defer shutdown()
+
+	newCfg := makeConfig(7)
+	newCfg.Polling.IntervalMS = 5_000
+	cap := 12.5
+	newCfg.Agent.DailyBudgetUSD = &cap
+	newCfg.Agent.MaxRetryBackoffMS = 600_000
+
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg})
+	if out.Err != nil {
+		t.Fatalf("reload err: %v", out.Err)
+	}
+	if !out.Applied {
+		t.Fatal("expected Applied=true")
+	}
+	if out.Restart {
+		t.Fatalf("did not expect Restart=true, got Affected=%v", out.Affected)
+	}
+	wantKeys := map[string]bool{
+		"polling.interval_ms":         false,
+		"agent.max_concurrent_agents": false,
+		"agent.max_retry_backoff_ms":  false,
+		"agent.daily_budget_usd":      false,
+	}
+	for _, k := range out.Affected {
+		if _, ok := wantKeys[k]; ok {
+			wantKeys[k] = true
+		}
+	}
+	for k, hit := range wantKeys {
+		if !hit {
+			t.Fatalf("expected %q in Affected, got %v", k, out.Affected)
+		}
+	}
+
+	// Re-snapshot — the actor's state mirrors should reflect new values.
+	waitForCondition(t, "state mirror updated", func() bool {
+		return o.state.PollIntervalMS == 5_000 && o.state.MaxConcurrentAgents == 7
+	})
+}
+
+// TestReloadRejectsInvalidConfig exercises the "MUST NOT crash; keep
+// last-known-good" branch of SPEC §6.2.
+func TestReloadRejectsInvalidConfig(t *testing.T) {
+	cfg := makeConfig(2)
+	tr := tracker.NewMemoryTracker(nil)
+	runner := newScriptedRunner(nil)
+	h, o, shutdown := bootActor(t, cfg, tr, runner)
+	defer shutdown()
+
+	// Empty Linear API key fails ValidateForDispatch.
+	bad := makeConfig(2)
+	bad.Linear.APIKey = ""
+
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: bad})
+	if out.Err == nil {
+		t.Fatal("expected validation err")
+	}
+	if out.Applied {
+		t.Fatal("Applied must be false on validation failure")
+	}
+	if o.cfg.Linear.APIKey == "" {
+		t.Fatal("orchestrator dropped its last-known-good config")
+	}
+}
+
+// TestReloadFlagsRestartRequiredFields ensures a backend swap surfaces
+// in the Restart flag — the constructor closed over the old backend at
+// boot time, so the operator must restart.
+func TestReloadFlagsRestartRequiredFields(t *testing.T) {
+	cfg := makeConfig(2)
+	tr := tracker.NewMemoryTracker(nil)
+	runner := newScriptedRunner(nil)
+	h, _, shutdown := bootActor(t, cfg, tr, runner)
+	defer shutdown()
+
+	newCfg := makeConfig(2)
+	newCfg.Agent.Backend = config.BackendClaudeCode
+	newCfg.ClaudeCode = config.ClaudeCodeConfig{Command: "claude --print"}
+	newCfg.Codex = config.CodexConfig{} // zero out so ValidateForDispatch only checks claude_code
+
+	out := h.Reload(context.Background(), &config.WorkflowDefinition{Config: newCfg})
+	if out.Err != nil {
+		t.Fatalf("reload err: %v", out.Err)
+	}
+	if !out.Applied {
+		t.Fatal("expected Applied=true even when Restart=true")
+	}
+	if !out.Restart {
+		t.Fatal("expected Restart=true on backend change")
+	}
+}
