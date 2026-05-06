@@ -41,27 +41,45 @@ type cmdAgentUpdate struct {
 type cmdRetryFire struct{ IssueID string }
 type cmdSnapshot struct{ Reply chan<- Snapshot }
 
-// cmdReload swaps the orchestrator's actor-facing config knobs (polling
-// cadence, concurrency caps, budget cap, retry backoff, hook scripts and
-// timeout) per SPEC §6.2. Backend / tracker / prompt template / workspace
-// root require a process restart to change because their constructors
-// closed over the old values; the SPEC explicitly allows this
-// ("Implementations are not REQUIRED to restart in-flight agent
-// sessions automatically when config changes.").
+// cmdReload swaps the orchestrator's config and (optionally) its tracker
+// and worker runner per SPEC §6.2. The actor cfg-swap covers polling
+// cadence, concurrency caps, budget cap, retry backoff, terminal_states
+// and per-backend stall_timeout_ms; the optional Components struct
+// covers tracker auth, agent.backend, per-backend command/endpoint,
+// workspace.root, and hooks (whose constructors otherwise close over
+// the old values at boot time).
+//
+// In-flight workers continue on the runner active at their dispatch
+// time; only new dispatches pick up the swapped runner. SPEC §6.2:
+// "Implementations are not REQUIRED to restart in-flight agent sessions
+// automatically when config changes."
 type cmdReload struct {
 	Definition *config.WorkflowDefinition
+	Components ReloadComponents
 	Reply      chan<- ReloadOutcome
 }
 type cmdShutdown struct{}
+
+// ReloadComponents holds rebuilt runtime dependencies that should be
+// swapped atomically along with the cfg pointer. A nil field means
+// "keep the existing component". The caller is responsible for
+// reconstructing only the components whose backing config fields
+// actually changed — see cmd/symphony for the diff-and-rebuild logic.
+type ReloadComponents struct {
+	Tracker tracker.Tracker
+	Runner  WorkerRunner
+}
 
 // ReloadOutcome is the reply the actor sends back after handling cmdReload.
 // SPEC §6.2: invalid reloads MUST NOT crash; the orchestrator keeps the
 // last-known-good config and the caller logs the err.
 type ReloadOutcome struct {
-	Applied  bool
-	Err      error
-	Restart  bool     // set when the new config differs in fields that need a process restart.
-	Affected []string // list of keys that DID hot-swap (for operator-visible logs).
+	Applied        bool
+	Err            error
+	Restart        bool     // set when restart-required fields changed AND Components didn't supply a swap.
+	Affected       []string // list of keys that DID hot-swap (for operator-visible logs).
+	SwappedTracker bool     // true when Components.Tracker replaced o.tracker.
+	SwappedRunner  bool     // true when Components.Runner replaced o.runner.
 }
 
 func (cmdTick) commandTag()        {}
@@ -243,15 +261,18 @@ func (h *Handle) Tick(ctx context.Context) {
 	}
 }
 
-// Reload asks the actor to swap its actor-facing config knobs to the
-// values in def (SPEC §6.2). The returned ReloadOutcome reports which
-// keys hot-swapped, whether any restart-required keys also changed, and
-// any preflight error. If ctx is cancelled before the actor replies, an
-// outcome with Err set is returned.
-func (h *Handle) Reload(ctx context.Context, def *config.WorkflowDefinition) ReloadOutcome {
+// Reload asks the actor to swap its config (and optionally its tracker
+// and runner) per SPEC §6.2. Components fields that are non-nil replace
+// the corresponding orchestrator dependency; nil fields are left as-is.
+// The returned ReloadOutcome reports which keys hot-swapped, whether
+// any restart-required keys still need a process restart (Components
+// did not supply a fresh tracker/runner for them), and any preflight
+// error. If ctx is cancelled before the actor replies, an outcome with
+// Err set is returned.
+func (h *Handle) Reload(ctx context.Context, def *config.WorkflowDefinition, components ReloadComponents) ReloadOutcome {
 	reply := make(chan ReloadOutcome, 1)
 	select {
-	case h.cmd <- cmdReload{Definition: def, Reply: reply}:
+	case h.cmd <- cmdReload{Definition: def, Components: components, Reply: reply}:
 	case <-ctx.Done():
 		return ReloadOutcome{Err: ctx.Err()}
 	}
@@ -500,17 +521,18 @@ func (o *Orchestrator) handleCommand(ctx context.Context, cmd Command) {
 	case cmdSnapshot:
 		c.Reply <- o.snapshot()
 	case cmdReload:
-		c.Reply <- o.handleReload(c.Definition)
+		c.Reply <- o.handleReload(c.Definition, c.Components)
 	}
 }
 
 // handleReload swaps the actor's *config.ServiceConfig to the validated
 // one in def, mirrors the changed values on OrchestratorState, and
-// reports back which fields hot-swapped. Restart-required keys (tracker
-// auth/endpoint, agent.backend, per-backend command/endpoint, workspace
-// root, hooks, server.port) are listed in the outcome so the caller can
-// log a "restart needed for full effect" warning per SPEC §6.2.
-func (o *Orchestrator) handleReload(def *config.WorkflowDefinition) ReloadOutcome {
+// optionally swaps the tracker / runner if the caller pre-rebuilt them
+// in components. The outcome lists which keys hot-swapped, which
+// components were swapped, and whether restart-required keys remain
+// (Restart=true means at least one restart-required field changed and
+// the caller did NOT supply a rebuilt component for it).
+func (o *Orchestrator) handleReload(def *config.WorkflowDefinition, components ReloadComponents) ReloadOutcome {
 	if def == nil {
 		return ReloadOutcome{Err: fmt.Errorf("nil workflow definition")}
 	}
@@ -527,15 +549,36 @@ func (o *Orchestrator) handleReload(def *config.WorkflowDefinition) ReloadOutcom
 	o.state.PollIntervalMS = newCfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = newCfg.Agent.MaxConcurrentAgents
 
+	swappedTracker := false
+	if components.Tracker != nil {
+		o.tracker = components.Tracker
+		swappedTracker = true
+	}
+	swappedRunner := false
+	if components.Runner != nil {
+		o.runner = components.Runner
+		swappedRunner = true
+	}
+
+	// Restart=true reports the leftover gap: restart-required fields
+	// changed AND the caller didn't ship a component swap that would
+	// satisfy them. When the caller rebuilt both tracker and runner,
+	// every restart-required field is now serviceable in-process.
+	restartGap := len(restart) > 0 && !(swappedTracker && swappedRunner)
+
 	if len(affected) > 0 || len(restart) > 0 {
 		o.logger.Info("workflow reload applied",
 			slog.Any("hot_swapped", affected),
-			slog.Any("restart_required", restart))
+			slog.Any("restart_required", restart),
+			slog.Bool("swapped_tracker", swappedTracker),
+			slog.Bool("swapped_runner", swappedRunner))
 	}
 	return ReloadOutcome{
-		Applied:  true,
-		Affected: affected,
-		Restart:  len(restart) > 0,
+		Applied:        true,
+		Affected:       affected,
+		Restart:        restartGap,
+		SwappedTracker: swappedTracker,
+		SwappedRunner:  swappedRunner,
 	}
 }
 
@@ -772,13 +815,18 @@ func (o *Orchestrator) dispatch(ctx context.Context, i issue.Issue, attempt *uin
 
 	events := make(chan AgentEvent, 64)
 	o.workersWG.Add(1)
-	go o.runWorker(workerCtx, i, attempt, events)
+	// Capture o.runner here on the actor goroutine so a concurrent
+	// hot-swap of o.runner via cmdReload can't race the worker's read.
+	// In-flight workers continue on the runner that was active at
+	// dispatch time; new dispatches pick up the swapped runner.
+	runner := o.runner
+	go o.runWorker(workerCtx, runner, i, attempt, events)
 	go o.fanoutEvents(workerCtx, i.ID, events)
 }
 
-func (o *Orchestrator) runWorker(ctx context.Context, i issue.Issue, attempt *uint32, events chan AgentEvent) {
+func (o *Orchestrator) runWorker(ctx context.Context, runner WorkerRunner, i issue.Issue, attempt *uint32, events chan AgentEvent) {
 	defer o.workersWG.Done()
-	outcome := o.runner.Run(ctx, i, attempt, events)
+	outcome := runner.Run(ctx, i, attempt, events)
 	close(events)
 	// Always try to deliver cmdWorkerExit so the actor can clean up
 	// state and schedule a retry. Watching ctx.Done() here is incorrect:
