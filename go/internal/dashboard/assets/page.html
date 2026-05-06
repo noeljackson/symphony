@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Symphony — Dashboard</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.5/bundles/datastar.js"></script>
+</head>
+<body data-on-load="@get('/dashboard/sse')">
+  <header class="hero-card">
+    <div>
+      <p class="eyebrow">Symphony</p>
+      <h1 class="hero-title">Operations Dashboard</h1>
+      <p class="hero-copy">
+        Live view of running sessions, retry queue, and aggregate token + USD cost.
+        Updates stream in via Server-Sent Events; no polling.
+      </p>
+    </div>
+    <div class="status-stack">
+      <span class="status-badge status-badge-live">
+        <span class="status-badge-dot"></span> live
+      </span>
+      <span class="meta">generated {{.GeneratedAt}}</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section id="totals" class="card">
+      {{template "totals" .}}
+    </section>
+
+    <section id="running" class="card">
+      {{template "running" .}}
+    </section>
+
+    <section id="retrying" class="card">
+      {{template "retrying" .}}
+    </section>
+  </main>
+
+  {{define "running"}}
+  <header>
+    <h2>Running <span class="count">{{.Counts.Running}}</span></h2>
+  </header>
+  {{if eq (len .Running) 0}}
+    <p class="empty">No agents running right now.</p>
+  {{else}}
+  <table>
+    <thead>
+      <tr>
+        <th>Issue</th><th>State</th><th>Turns</th><th>Last event</th>
+        <th>Tokens</th><th>Started</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Running}}
+      <tr>
+        <td>{{.IssueIdentifier}}</td>
+        <td>{{.State}}</td>
+        <td>{{.TurnCount}}</td>
+        <td>
+          <div class="last-event">{{.LastEvent}}</div>
+          {{if .LastMessage}}<div class="last-message">{{.LastMessage}}</div>{{end}}
+        </td>
+        <td class="tokens">{{.InputTokens}} in / {{.OutputTokens}} out</td>
+        <td>{{.StartedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{end}}
+
+  {{define "retrying"}}
+  <header>
+    <h2>Retrying <span class="count">{{.Counts.Retrying}}</span></h2>
+  </header>
+  {{if eq (len .Retrying) 0}}
+    <p class="empty">No retries pending.</p>
+  {{else}}
+  <table>
+    <thead>
+      <tr><th>Issue</th><th>Attempt</th><th>Due in</th><th>Error</th></tr>
+    </thead>
+    <tbody>
+      {{range .Retrying}}
+      <tr>
+        <td>{{.IssueIdentifier}}</td>
+        <td>#{{.Attempt}}</td>
+        <td>{{.DueIn}}</td>
+        <td class="error">{{.Error}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+  {{end}}
+
+  {{define "totals"}}
+  <header><h2>Agent totals</h2></header>
+  <dl>
+    <div><dt>Input tokens</dt><dd>{{.Totals.InputTokens}}</dd></div>
+    <div><dt>Output tokens</dt><dd>{{.Totals.OutputTokens}}</dd></div>
+    <div><dt>Total tokens</dt><dd>{{.Totals.TotalTokens}}</dd></div>
+    <div><dt>Seconds running</dt><dd>{{printf "%.1f" .Totals.SecondsRunning}}</dd></div>
+    <div><dt>Cost (today)</dt><dd>{{.Totals.CostUSDToday}}</dd></div>
+    <div><dt>Cost (lifetime)</dt><dd>{{.Totals.CostUSD}}</dd></div>
+  </dl>
+  {{end}}
+</body>
+</html>
