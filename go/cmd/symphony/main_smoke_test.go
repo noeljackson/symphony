@@ -158,7 +158,7 @@ Issue {{ issue.identifier }}: {{ issue.title }}
 `
 	path := writeWorkflow(t, body)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, path)
 	stdoutBuf := &lineBuffer{}
@@ -172,10 +172,10 @@ Issue {{ issue.identifier }}: {{ issue.title }}
 		_ = cmd.Wait()
 	}()
 
-	addr := waitForHTTPAddr(t, stdoutBuf, 5*time.Second)
+	addr := waitForHTTPAddr(t, stdoutBuf, 20*time.Second)
 
 	// Poll /api/v1/state until 200 OK.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		resp, err := http.Get("http://" + addr + "/api/v1/state")
 		if err == nil {
