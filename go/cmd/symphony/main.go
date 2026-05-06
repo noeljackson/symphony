@@ -163,28 +163,9 @@ func run(ctx context.Context, workflowPath string, portOverride int, logger *slo
 		slog.String("tracker", string(cfg.Tracker.Kind)),
 		slog.String("backend", string(cfg.Agent.Backend)))
 
-	ws, err := workspace.New(cfg.Workspace.Root, workspace.Hooks{
-		AfterCreate:  derefStr(cfg.Hooks.AfterCreate),
-		BeforeRun:    derefStr(cfg.Hooks.BeforeRun),
-		AfterRun:     derefStr(cfg.Hooks.AfterRun),
-		BeforeRemove: derefStr(cfg.Hooks.BeforeRemove),
-		Timeout:      cfg.HookTimeout(),
-	})
+	cs, err := buildComponents(def, nil)
 	if err != nil {
-		return fmt.Errorf("workspace setup: %w", err)
-	}
-	pb, err := prompt.New(def.PromptTemplate)
-	if err != nil {
-		return fmt.Errorf("prompt template: %w", err)
-	}
-
-	tr, err := buildTracker(cfg)
-	if err != nil {
-		return fmt.Errorf("tracker setup: %w", err)
-	}
-	runner, err := buildBackend(cfg, ws, pb)
-	if err != nil {
-		return fmt.Errorf("backend setup: %w", err)
+		return err
 	}
 	st, storeKind, err := buildStore(ctx, logger)
 	if err != nil {
@@ -192,7 +173,7 @@ func run(ctx context.Context, workflowPath string, portOverride int, logger *slo
 	}
 	logger.Info("state store ready", slog.String("kind", storeKind))
 
-	o, h := orchestrator.New(cfg, tr, runner, st, orchestrator.Options{
+	o, h := orchestrator.New(cs.cfg, cs.tracker, cs.runner, st, orchestrator.Options{
 		Logger:       logger,
 		AutoSchedule: true,
 	})
@@ -206,7 +187,7 @@ func run(ctx context.Context, workflowPath string, portOverride int, logger *slo
 		close(orchDone)
 	}()
 
-	srv, err := maybeStartHTTPServer(cfg, h, portOverride, logger)
+	srv, err := maybeStartHTTPServer(cs.cfg, h, portOverride, logger)
 	if err != nil {
 		cancel()
 		<-orchDone
@@ -215,7 +196,7 @@ func run(ctx context.Context, workflowPath string, portOverride int, logger *slo
 
 	// SPEC §6.2: hot-reload on WORKFLOW.md change. Watcher failures are
 	// non-fatal — the orchestrator keeps running with the boot-time cfg.
-	startWorkflowWatcher(runCtx, def.Path, h, logger)
+	startWorkflowWatcher(runCtx, def.Path, h, cs, logger)
 
 	// First tick fires immediately; the auto-scheduler keeps it going.
 	h.Tick(runCtx)
@@ -361,11 +342,190 @@ func derefStr(p *string) string {
 	return *p
 }
 
+// componentSet bundles the orchestrator's runtime dependencies that
+// closed-at-boot-time over a particular ServiceConfig + prompt
+// template. On a §6.2 hot-reload, [buildComponents] reuses any
+// dependency whose backing config didn't change and rebuilds the rest.
+type componentSet struct {
+	def     *config.WorkflowDefinition
+	cfg     *config.ServiceConfig
+	ws      *workspace.Manager
+	pb      *prompt.Builder
+	tracker tracker.Tracker
+	runner  orchestrator.WorkerRunner
+}
+
+// buildComponents constructs the orchestrator's runtime dependencies
+// for def. When prev is non-nil, the function reuses each dependency
+// whose backing config slice didn't change; this keeps in-flight
+// workspaces / tracker connections / backend HTTP clients alive across
+// reloads so the actor can swap them atomically with no stale state.
+func buildComponents(def *config.WorkflowDefinition, prev *componentSet) (*componentSet, error) {
+	cfg := def.Config
+	cs := &componentSet{def: def, cfg: cfg}
+
+	// Workspace: rebuild on root or hooks change.
+	if prev != nil && prev.cfg.Workspace.Root == cfg.Workspace.Root && hooksEqual(prev.cfg.Hooks, cfg.Hooks) {
+		cs.ws = prev.ws
+	} else {
+		ws, err := workspace.New(cfg.Workspace.Root, workspace.Hooks{
+			AfterCreate:  derefStr(cfg.Hooks.AfterCreate),
+			BeforeRun:    derefStr(cfg.Hooks.BeforeRun),
+			AfterRun:     derefStr(cfg.Hooks.AfterRun),
+			BeforeRemove: derefStr(cfg.Hooks.BeforeRemove),
+			Timeout:      cfg.HookTimeout(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("workspace setup: %w", err)
+		}
+		cs.ws = ws
+	}
+
+	// Prompt template: rebuild only if the body changed.
+	if prev != nil && prev.def.PromptTemplate == def.PromptTemplate {
+		cs.pb = prev.pb
+	} else {
+		pb, err := prompt.New(def.PromptTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("prompt template: %w", err)
+		}
+		cs.pb = pb
+	}
+
+	// Tracker: rebuild on kind / auth / endpoint change.
+	if prev != nil && trackerSettingsEqual(prev.cfg, cfg) {
+		cs.tracker = prev.tracker
+	} else {
+		tr, err := buildTracker(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("tracker setup: %w", err)
+		}
+		cs.tracker = tr
+	}
+
+	// Backend: rebuild on backend selection / per-backend config / shared
+	// dependency (workspace, prompt) change.
+	backendDepsChanged := prev == nil ||
+		!backendSettingsEqual(prev.cfg, cfg) ||
+		cs.ws != prev.ws ||
+		cs.pb != prev.pb
+	if !backendDepsChanged {
+		cs.runner = prev.runner
+	} else {
+		runner, err := buildBackend(cfg, cs.ws, cs.pb)
+		if err != nil {
+			return nil, fmt.Errorf("backend setup: %w", err)
+		}
+		cs.runner = runner
+	}
+
+	return cs, nil
+}
+
+func hooksEqual(a, b config.HooksConfig) bool {
+	return strPtrEq(a.AfterCreate, b.AfterCreate) &&
+		strPtrEq(a.BeforeRun, b.BeforeRun) &&
+		strPtrEq(a.AfterRun, b.AfterRun) &&
+		strPtrEq(a.BeforeRemove, b.BeforeRemove) &&
+		a.TimeoutMS == b.TimeoutMS
+}
+
+func strPtrEq(a, b *string) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return *a == *b
+	}
+}
+
+func trackerSettingsEqual(a, b *config.ServiceConfig) bool {
+	if a.Tracker.Kind != b.Tracker.Kind {
+		return false
+	}
+	if !sliceStringEq(a.Tracker.ActiveStates, b.Tracker.ActiveStates) ||
+		!sliceStringEq(a.Tracker.TerminalStates, b.Tracker.TerminalStates) {
+		return false
+	}
+	switch a.Tracker.Kind {
+	case config.TrackerLinear:
+		return a.Linear == b.Linear
+	case config.TrackerGitHub:
+		return a.GitHub.Endpoint == b.GitHub.Endpoint &&
+			a.GitHub.Owner == b.GitHub.Owner &&
+			a.GitHub.Repo == b.GitHub.Repo &&
+			a.GitHub.APIToken == b.GitHub.APIToken &&
+			a.GitHub.AppID == b.GitHub.AppID &&
+			a.GitHub.AppInstallationID == b.GitHub.AppInstallationID &&
+			a.GitHub.PrivateKey == b.GitHub.PrivateKey &&
+			a.GitHub.Assignee == b.GitHub.Assignee &&
+			mapStringIntEqual(a.GitHub.LabelPriorityMap, b.GitHub.LabelPriorityMap)
+	}
+	return true
+}
+
+func backendSettingsEqual(a, b *config.ServiceConfig) bool {
+	if a.Agent.Backend != b.Agent.Backend ||
+		a.Agent.MaxTurns != b.Agent.MaxTurns {
+		return false
+	}
+	switch a.Agent.Backend {
+	case config.BackendCodex:
+		return a.Codex.Command == b.Codex.Command &&
+			a.Codex.TurnTimeoutMS == b.Codex.TurnTimeoutMS &&
+			a.Codex.ReadTimeoutMS == b.Codex.ReadTimeoutMS &&
+			a.Codex.StallTimeoutMS == b.Codex.StallTimeoutMS
+	case config.BackendClaudeCode:
+		return a.ClaudeCode.Command == b.ClaudeCode.Command &&
+			a.ClaudeCode.PermissionMode == b.ClaudeCode.PermissionMode &&
+			a.ClaudeCode.Model == b.ClaudeCode.Model &&
+			a.ClaudeCode.TurnTimeoutMS == b.ClaudeCode.TurnTimeoutMS &&
+			a.ClaudeCode.ReadTimeoutMS == b.ClaudeCode.ReadTimeoutMS &&
+			a.ClaudeCode.StallTimeoutMS == b.ClaudeCode.StallTimeoutMS &&
+			sliceStringEq(a.ClaudeCode.AllowedTools, b.ClaudeCode.AllowedTools) &&
+			sliceStringEq(a.ClaudeCode.DisallowedTools, b.ClaudeCode.DisallowedTools)
+	case config.BackendOpenAICompat:
+		return a.OpenAICompat == b.OpenAICompat
+	case config.BackendAnthropicMessages:
+		return a.AnthropicMessages == b.AnthropicMessages
+	}
+	return true
+}
+
+func sliceStringEq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func mapStringIntEqual(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || v != w {
+			return false
+		}
+	}
+	return true
+}
+
 // startWorkflowWatcher subscribes to filesystem changes on path and
-// forwards each successful reload to the orchestrator (SPEC §6.2).
-// Validation errors are logged at warn level; the orchestrator keeps
-// running with the last-known-good config per SPEC §6.2.
-func startWorkflowWatcher(ctx context.Context, path string, h *orchestrator.Handle, logger *slog.Logger) {
+// forwards each successful reload to the orchestrator (SPEC §6.2). On
+// each event the previous componentSet is diffed against the new one,
+// dependencies whose backing config changed are rebuilt, and the result
+// is shipped to the actor via Handle.Reload's ReloadComponents struct.
+// Validation/build errors are logged at warn level; the orchestrator
+// keeps running with the last-known-good config per SPEC §6.2.
+func startWorkflowWatcher(ctx context.Context, path string, h *orchestrator.Handle, initial *componentSet, logger *slog.Logger) {
 	events, err := watcher.Watch(ctx, path)
 	if err != nil {
 		logger.Warn("workflow watcher disabled", slog.String("path", path), slog.String("err", err.Error()))
@@ -373,13 +533,27 @@ func startWorkflowWatcher(ctx context.Context, path string, h *orchestrator.Hand
 	}
 	go func() {
 		logger.Info("workflow watcher started", slog.String("path", path))
+		current := initial
 		for ev := range events {
 			if ev.Err != nil {
 				logger.Warn("workflow reload failed; keeping last-known-good config",
 					slog.String("err", ev.Err.Error()))
 				continue
 			}
-			outcome := h.Reload(ctx, ev.Definition)
+			next, err := buildComponents(ev.Definition, current)
+			if err != nil {
+				logger.Warn("workflow reload rebuild failed; keeping last-known-good components",
+					slog.String("err", err.Error()))
+				continue
+			}
+			components := orchestrator.ReloadComponents{}
+			if next.tracker != current.tracker {
+				components.Tracker = next.tracker
+			}
+			if next.runner != current.runner {
+				components.Runner = next.runner
+			}
+			outcome := h.Reload(ctx, ev.Definition, components)
 			if outcome.Err != nil {
 				logger.Warn("workflow reload rejected by orchestrator",
 					slog.String("err", outcome.Err.Error()))
@@ -387,10 +561,13 @@ func startWorkflowWatcher(ctx context.Context, path string, h *orchestrator.Hand
 			}
 			logger.Info("workflow reload applied",
 				slog.Any("hot_swapped", outcome.Affected),
+				slog.Bool("swapped_tracker", outcome.SwappedTracker),
+				slog.Bool("swapped_runner", outcome.SwappedRunner),
 				slog.Bool("restart_required", outcome.Restart))
 			if outcome.Restart {
-				logger.Warn("some workflow keys changed but require a process restart to take full effect")
+				logger.Warn("some workflow keys still require a process restart to take full effect")
 			}
+			current = next
 		}
 	}()
 }
