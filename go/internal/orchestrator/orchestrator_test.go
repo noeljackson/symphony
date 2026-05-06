@@ -295,3 +295,55 @@ func TestRecentEventsSurviveRestartViaStore(t *testing.T) {
 		t.Fatal("expected session_started in persisted recent_events")
 	}
 }
+
+// TestStallDetectionCancelsWorkerAndQueuesRetry exercises SPEC §8.5
+// Part A end-to-end. A scripted runner ignores the events channel
+// entirely so the orchestrator never sees a "last_agent_timestamp"
+// update. After a tick cycles past stall_timeout_ms, the worker's
+// context should cancel, the worker exits, and a retry entry shows
+// up with `error == "stall_timeout"`.
+func TestStallDetectionCancelsWorkerAndQueuesRetry(t *testing.T) {
+	cfg := makeConfig(10)
+	cfg.Codex.StallTimeoutMS = 50 // 50 ms — well under the test timeout
+	tr := tracker.NewMemoryTracker([]issue.Issue{mkIssue("a", "MT-1", "Todo")})
+
+	// Stall runner: blocks on ctx.Done() without ever emitting an event,
+	// so the orchestrator's stall detector has nothing to reset its
+	// timestamp clock against.
+	runner := &stallRunner{}
+
+	h, _, shutdown := bootActor(t, cfg, tr, runner)
+	defer shutdown()
+
+	ctx := context.Background()
+	h.Tick(ctx)
+	waitForCondition(t, "running entry", func() bool {
+		snap, ok := h.Snapshot(ctx)
+		return ok && len(snap.Running) == 1
+	})
+
+	// Wait long enough for the stall to register, then trigger another
+	// tick so detectStalls runs and cancels the worker.
+	time.Sleep(120 * time.Millisecond)
+	h.Tick(ctx)
+
+	waitForCondition(t, "retry queued with stall_timeout error", func() bool {
+		snap, ok := h.Snapshot(ctx)
+		if !ok {
+			return false
+		}
+		for _, r := range snap.Retrying {
+			if r.Identifier == "MT-1" && r.Error == "stall_timeout" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+type stallRunner struct{}
+
+func (r *stallRunner) Run(ctx context.Context, _ issue.Issue, _ *uint32, _ chan<- AgentEvent) WorkerOutcome {
+	<-ctx.Done()
+	return WorkerOutcome{Kind: WorkerOutcomeFailure, Error: "ctx cancelled"}
+}
