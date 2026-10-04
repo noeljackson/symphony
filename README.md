@@ -42,22 +42,28 @@ Tell your favorite coding agent to build Symphony in a programming language of y
 > Implement Symphony according to the following spec:
 > https://github.com/openai/symphony/blob/main/SPEC.md
 
-### Option 2. Use one of the reference implementations
+### Option 2. Use the Rust implementation
 
-This repository ships two reference implementations:
+This repository ships the [Rust implementation](rust/README.md), which
+targets SPEC v2 with the Codex and Claude Code backends, an HTTP dashboard,
+and the `linear_graphql` extension. The current [SPEC v3](SPEC.md) also
+describes persistent storage and GitHub tracking; those are not implemented
+in Rust yet.
 
-- **Elixir** — [elixir/README.md](elixir/README.md). The original
-  reference, currently single-backend (Codex stdio). Read this first if
-  you want a full feature tour, including the Phoenix dashboard and
-  workflow-driven SSH worker pool.
-- **Rust** — [rust/README.md](rust/README.md). The newer reference,
-  designed around SPEC v2's multi-backend architecture. Targets Core
-  Conformance plus the HTTP dashboard and `linear_graphql` extensions.
+```sh
+cd rust
+cargo build --release --locked
+cargo test --workspace --locked
+```
+
+Configure a `WORKFLOW.md` with the SPEC v2 Linear tracker fields documented
+in [rust/README.md](rust/README.md), then run `rust/target/release/symphony`
+with that workflow's path.
 
 You can also ask your favorite coding agent to help with the setup:
 
 > Set up Symphony for my repository based on
-> https://github.com/noeljackson/symphony/blob/main/elixir/README.md
+> https://github.com/noeljackson/symphony/blob/main/rust/README.md
 
 ---
 

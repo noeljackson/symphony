@@ -40,8 +40,8 @@ description:
    - Summary of key changes (what changed).
    - Rationale and trade-offs (why it changed).
    - Tests or validation run (or explicit note if not run).
-9. Append a `Co-authored-by` trailer for Codex using `Codex <codex@openai.com>`
-   unless the user explicitly requests a different identity.
+9. Do not append co-author trailers or AI attribution. The repository owner
+   has requested commit messages without co-author lines.
 10. Wrap body lines at 72 characters.
 11. Create the commit message with a here-doc or temp file and use
     `git commit -F <file>` so newlines are literal (avoid `-m` with `\n`).
@@ -71,5 +71,4 @@ Rationale:
 Tests:
 - <command or "not run (reason)">
 
-Co-authored-by: Codex <codex@openai.com>
 ```

@@ -18,5 +18,7 @@
 
 #### Test Plan
 
-- [ ] `make -C elixir all`
+- [ ] `cd rust && cargo fmt --all --check`
+- [ ] `cd rust && cargo clippy --workspace --all-targets --locked -- -D warnings`
+- [ ] `cd rust && cargo test --workspace --locked`
 - [ ] <!-- Additional targeted checks (list below) -->

@@ -6,16 +6,12 @@ file so the same guidance applies regardless of which harness is used.
 
 ## What this repo is
 
-Symphony is an orchestrator that polls an issue tracker (Linear today),
-creates per-issue workspaces, and runs a coding agent backend against
-each issue. The contract lives in [`SPEC.md`](SPEC.md). Two reference
-implementations live alongside it:
-
-| Tree | Status |
-|---|---|
-| [`elixir/`](elixir/) | Original reference. Single backend (`codex`). Phoenix LiveView dashboard, full feature tour. |
-| [`rust/`](rust/) | First-port reference for SPEC v2. Two backends (`codex`, `claude_code`). Frozen at v2 — Go is the v3+ canonical impl. |
-| [`go/`](go/) | **Canonical implementation as of SPEC v3.** Single-tenant CLI; Postgres `StateStore` (forthcoming PR), templ + Datastar dashboard (forthcoming PR), backends ported one PR at a time. |
+Symphony polls Linear, creates per-issue workspaces, and runs a coding
+agent backend against each issue. The contract lives in [`SPEC.md`](SPEC.md).
+The only shipped implementation is [`rust/`](rust/), targeting SPEC v2
+with the `codex` and `claude_code` backends. SPEC v3 describes additional
+contracts that Rust does not yet implement, including persistent storage
+and GitHub tracking. Keep that distinction explicit in documentation.
 
 ## Spec-first
 
@@ -25,10 +21,9 @@ implementations. Concretely:
 1. If your change adds, removes, or alters orchestrator-visible behavior
    (a config field, an HTTP endpoint, a runtime event, a backend
    contract), edit `SPEC.md` first and open that as a separate PR.
-2. Once the spec PR is reviewed and merged, follow up with the canonical
-   implementation PR in `go/`. `elixir/` and `rust/` are reference impls
-   that don't need to track newer SPEC versions; only update them
-   intentionally.
+2. Once the spec PR is reviewed and merged, follow up with the
+   implementation PR in `rust/`. Rust currently targets SPEC v2;
+   implement newer SPEC contracts only intentionally.
 3. Pure bug fixes / refactors / test additions that don't change spec
    behavior can skip step 1.
 
@@ -51,29 +46,12 @@ and defer until merge.
   The `validate-pr-description` workflow rejects PRs that don't include
   the `#### Context / TL;DR / Summary / Alternatives / Test Plan` sections.
 - **CI**: `.github/workflows/rust.yml` (fmt + clippy + test) and
-  `.github/workflows/make-all.yml` (Elixir setup + build + fmt-check
-  + lint + test + dialyzer). All checks must be green before merge.
+  `.github/workflows/pr-description-lint.yml` (Python template validation).
+  All checks must be green before merge.
+- **PR validation**: `python3 .github/scripts/check_pr_body.py --file <body.md>`.
 - **Roadmap**: track in-flight UX work in
   [`docs/TODO.md`](docs/TODO.md). GitHub Issues are disabled for this
   repo; the markdown checklist is the project's tracker.
-
-## Working in `elixir/`
-
-See [`elixir/AGENTS.md`](elixir/AGENTS.md) for tree-specific rules
-(specs.check requirements, mix lint config, workspace safety
-invariants, etc.). The high-level workflow is:
-
-```sh
-cd elixir
-make setup    # mix deps.get + compile
-make all      # fmt-check + lint + coverage + dialyzer
-```
-
-mix format runs against the **CI-pinned Elixir 1.19**; running mix
-format locally with an older Elixir (1.14, etc.) will silently revert
-1.19-specific normalization (e.g. `(() -> T)` → `(-> T)`) and CI will
-fail. If you don't have 1.19 locally, push and let the CI's
-diagnostics PR-comment surface the diff.
 
 ## Working in `rust/`
 
@@ -100,54 +78,29 @@ workspace + hook lifecycle but inline their own turn loops on purpose
 — the closure-based shared loop fights the borrow checker for
 `&mut self` clients.
 
-## Working in `go/`
-
-The canonical Go implementation lives in [`go/`](go/). High-level workflow:
-
-```sh
-cd go
-make fmt-check
-make vet
-make test
-```
-
-Layout: `cmd/symphony/` is the binary; `internal/{config,issue,state,
-dispatch,tracker,store,orchestrator}` packages map roughly 1:1 onto the
-Rust crates. The actor pattern (single-authority `state.OrchestratorState`
-owned by one goroutine, commands through a channel) is native Go — no
-borrow-checker accommodations needed.
-
-The foundation PR ships pure-logic ports + a memory-backed `StateStore`
-+ a memory-backed `Tracker` + smoke-test orchestrator integration tests.
-Postgres `StateStore`, GitHub/Linear trackers over HTTP, agent backends
-(codex / claude_code / openai_compat / anthropic_messages), HTTP server,
-and templ + Datastar dashboard each land in subsequent PRs.
-
 ## Live integration tests
 
-Both trees keep "Real Integration Profile" tests behind explicit
-opt-ins matching SPEC §17.8. Skipped tests must be **reported as
-skipped, not silently treated as passed** — local panics with a clear
-message when the prerequisite credential / binary is missing.
+The Rust "Real Integration Profile" tests require explicit opt-ins
+matching SPEC §17.8. Report ignored tests as skipped, never as passed.
+Opted-in tests fail clearly when a required credential or binary is missing.
 
 ```sh
-# Rust
+cd rust
 cargo test -p symphony-codex --test live_codex -- --ignored
 cargo test -p symphony-tracker --test live_linear -- --ignored
-
-# Elixir
-SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_e2e_test.exs
-
-# Go
-SYMPHONY_RUN_LIVE_E2E=1 LINEAR_API_KEY=... LINEAR_PROJECT_SLUG=... \
-    go test ./internal/tracker/linear -run Live -v
 ```
 
-The Go convention: `SYMPHONY_RUN_LIVE_E2E=1` opts in to the live
-profile; without it, live tests `t.Skip` with a clear message. With
-the gate set but a required credential missing, the test `t.Fatal`s
-so an operator who explicitly opted in sees a hard error rather than
-silent green.
+`live_codex_turn_smoke` additionally requires
+`SYMPHONY_E2E_REAL_CODEX_FULL=1`. Linear tests require `LINEAR_API_KEY`;
+candidate fetch also requires `LINEAR_PROJECT_SLUG`.
+
+## Dependency maintenance
+
+`rust/vendor/liquid-core` replaces Liquid's unmaintained `anymap2`
+dependency with `anymap3`. Preserve upstream source and license files;
+see [`rust/vendor/README.md`](rust/vendor/README.md) before updating it.
+The Rust lockfile is the dependency authority. Run the strict supply-chain
+source gate after dependency updates, in addition to the Rust checks.
 
 ## Safety rails
 
