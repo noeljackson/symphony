@@ -26,7 +26,7 @@ description:
 ## Steps
 
 1. Identify current branch and confirm remote state.
-2. Run local validation (`make -C elixir all`) before pushing.
+2. Run local validation (`cargo fmt`, `cargo clippy`, and `cargo test` in `rust/`) before pushing.
 3. Push branch to `origin` with upstream tracking if needed, using whatever
    remote URL is already configured.
 4. If push is not clean/rejected:
@@ -52,7 +52,7 @@ description:
      scope (all intended work on the branch), not just the newest commits,
      including newly added work, removed work, or changed approach.
    - Do not reuse stale description text from earlier iterations.
-7. Validate PR body with `mix pr_body.check` and fix all reported issues.
+7. Validate PR body with `python3 .github/scripts/check_pr_body.py --file <body.md>` and fix all reported issues.
 8. Reply with the PR URL from `gh pr view`.
 
 ## Commands
@@ -62,7 +62,7 @@ description:
 branch=$(git branch --show-current)
 
 # Minimal validation gate
-make -C elixir all
+(cd rust && cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked)
 
 # Initial push: respect the current origin remote.
 git push -u origin HEAD
@@ -101,7 +101,7 @@ fi
 
 tmp_pr_body=$(mktemp)
 gh pr view --json body -q .body > "$tmp_pr_body"
-(cd elixir && mix pr_body.check --file "$tmp_pr_body")
+python3 .github/scripts/check_pr_body.py --file "$tmp_pr_body"
 rm -f "$tmp_pr_body"
 
 # Show PR URL for the reply

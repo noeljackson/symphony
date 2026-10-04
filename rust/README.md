@@ -1,8 +1,8 @@
 # Symphony (Rust)
 
 Rust port of Symphony, the workflow-driven coding-agent orchestrator described
-in [`../SPEC.md`](../SPEC.md). The Elixir implementation in `../elixir` is
-kept as prior art and reference.
+in [`../SPEC.md`](../SPEC.md). Rust is the only implementation shipped in
+this repository.
 
 This crate targets [SPEC v2](../SPEC.md) — the multi-backend revision. The
 orchestration core (polling, dispatch, retries, reconciliation, workspace
@@ -39,13 +39,49 @@ session lifecycle differ.
 ## Build
 
 ```sh
-cargo build --release
-cargo test
+cargo build --release --locked
+cargo test --workspace --locked
 ```
 
 CI: `.github/workflows/rust.yml` runs `cargo fmt --check`, `cargo clippy
 --workspace --all-targets --locked -- -D warnings`, and `cargo test
 --workspace --locked` on every PR and push to `main`.
+
+## Workflow configuration
+
+Rust retains the SPEC v2 flat Linear tracker configuration. SPEC v3's
+per-kind tracker blocks, GitHub tracker, and persistent state store are
+not implemented. For example:
+
+```yaml
+---
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: your-project-slug
+workspace:
+  root: ~/symphony-workspaces
+agent:
+  backend: codex
+codex:
+  command: codex app-server
+---
+Work on issue {{ issue.identifier }}: {{ issue.title }}.
+```
+
+Save this as `WORKFLOW.md`, set `LINEAR_API_KEY`, and run:
+
+```sh
+./target/release/symphony doctor /path/to/WORKFLOW.md
+./target/release/symphony --port 8080 /path/to/WORKFLOW.md
+```
+
+## Dependency maintenance
+
+`vendor/liquid-core` is a checksum-verified copy of Liquid core 0.26.11
+with its unmaintained `anymap2` dependency replaced by `anymap3` under the
+existing import alias. See [vendor/README.md](vendor/README.md) for the
+source checksum, patch, and update procedure.
 
 ## Live integration tests
 

@@ -16,11 +16,12 @@ description:
 
 ## Log Sources
 
-- Primary runtime log: `log/symphony.log`
-  - Default comes from `SymphonyElixir.LogFile` (`log/symphony.log`).
-  - Includes orchestrator, agent runner, and Codex app-server lifecycle logs.
-- Rotated runtime logs: `log/symphony.log*`
-  - Check these when the relevant run is older.
+- Rust emits runtime diagnostics through `tracing_subscriber` on stdout.
+  Read the service's captured stdout (for example journalctl or a configured
+  log file); there is no built-in rotating file sink.
+- Set `RUST_LOG` to adjust verbosity when reproducing a failure.
+- The examples below assume stdout was captured in `log/symphony.log`;
+  substitute the actual capture path when investigating a deployment.
 
 ## Correlation Keys
 
@@ -28,8 +29,8 @@ description:
 - `issue_id`: Linear UUID (stable internal ID)
 - `session_id`: Codex thread-turn pair (`<thread_id>-<turn_id>`)
 
-`elixir/docs/logging.md` requires these fields for issue/session lifecycle logs. Use
-them as your join keys during debugging.
+Use whichever of these fields the relevant Rust log statement emits as
+join keys. The issue API and SSE stream also expose recent runtime events.
 
 ## Quick Triage (Stuck Run)
 
@@ -85,8 +86,8 @@ rg -n "Issue stalled|scheduling retry|turn_timeout|turn_failed|Codex session fai
 
 ## Reading Codex Session Logs
 
-In Symphony, Codex session diagnostics are emitted into `log/symphony.log` and
-keyed by `session_id`. Read them as a lifecycle:
+In Symphony, Codex session diagnostics are emitted through tracing. Where
+available, use `session_id` to read them as a lifecycle:
 
 1. `Codex session started ... session_id=...`
 2. Session stream/lifecycle events for the same `session_id`
@@ -114,5 +115,5 @@ concurrent runs.
 
 - Prefer `rg` over `grep` for speed on large logs.
 - Check rotated logs (`log/symphony.log*`) before concluding data is missing.
-- If required context fields are missing in new log statements, align with
-  `elixir/docs/logging.md` conventions.
+- Consult the Rust actor and backend tracing statements when event names or
+  correlation fields differ from these examples.

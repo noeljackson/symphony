@@ -56,3 +56,8 @@ symphony-http = { path = "crates/symphony-http" }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Liquid has not migrated its unmaintained anymap2 dependency upstream.
+# The vendored core changes only that dependency to the compatible anymap3.
+[patch.crates-io]
+liquid-core = { path = "vendor/liquid-core" }
