@@ -7,8 +7,8 @@ Purpose: Define a service that orchestrates coding agents to get project work do
 v3 builds on v2's multi-backend foundation by adding two things v2 left
 implementation-defined: a normative **persistent state store** contract
 (§4.1.9) so cost ledgers, retry queues, and `recent_events` survive
-process restart, and a second tracker kind — **GitHub Issues** —
-alongside Linear (§5.3.1.A / §5.3.1.B). The tracker config is restructured
+process restart, and repository issue trackers — **GitHub Issues** and **Forgejo** —
+alongside Linear (§5.3.1.A / §5.3.1.B / §5.3.1.C). The tracker config is restructured
 into per-kind subblocks (parallel to v2's `agent.backend` + per-backend
 blocks) so adding future trackers (Jira, GitLab, etc.) does not require
 re-shaping the shared `tracker` object. v3 is a clean break from v2's
@@ -465,6 +465,7 @@ Fields shared across all tracker kinds:
   - Supported values for v3 core conformance:
     - `linear` — Linear GraphQL API (see §5.3.1.A)
     - `github` — GitHub Issues REST/GraphQL API (see §5.3.1.B)
+    - `forgejo` — Forgejo Issues REST API (see §5.3.1.C)
   - Implementations MAY support a subset and MUST document which kinds
     are available. Unknown values fail dispatch preflight validation.
 - `active_states` (list of strings)
@@ -541,6 +542,52 @@ State-mapping notes for GitHub:
   matching label is present.
 - The `branch_name` field on `Issue` is RECOMMENDED to be derived from
   the issue number and slugified title (e.g. `123-fix-login-flow`).
+
+##### 5.3.1.C `forgejo` (object)
+
+Used when `tracker.kind == "forgejo"`. Targets one repository on a
+Forgejo instance through its REST API. The orchestrator remains a reader;
+tracker writes belong to the workflow's agent tools (§11.5).
+
+- `endpoint` (string)
+  - REQUIRED. Full API base URL, including any deployment prefix and
+    `/api/v1` (for example `https://codeberg.org/api/v1`).
+  - MUST be an HTTP or HTTPS URL without user information, query, or fragment.
+  - There is no default public instance. Production deployments SHOULD use HTTPS.
+- `owner`, `repo` (strings)
+  - REQUIRED for dispatch. Each identifies one nonempty repository path segment.
+- `api_token` (string)
+  - REQUIRED for dispatch. MAY be a literal token or `$VAR_NAME`.
+  - Canonical environment variable: `FORGEJO_TOKEN`.
+  - Empty resolved tokens are missing. Tokens MUST have permission to read
+    issues in the configured repository; write permission is not required.
+- `label_priority_map` (map `label_name -> integer`, OPTIONAL)
+  - Default: empty map. Match label names case-insensitively.
+  - Use the lowest matching integer; unmapped issues have priority `1`.
+- `assignee` (string, OPTIONAL)
+  - Restricts candidate dispatch to issues assigned to this login.
+  - MUST NOT restrict terminal cleanup or state reconciliation.
+
+State mapping:
+
+- Match configured state names against labels case-insensitively.
+- Native `closed` issues MUST map to a configured terminal state,
+  regardless of active labels. Prefer `Closed` when configured, otherwise
+  the first configured terminal state. An empty terminal-state list is invalid.
+- For native `open` issues, a terminal label takes precedence over an
+  active label. Within each list, the first configured match wins.
+- An open issue without a matching label has state `open`; it is a
+  candidate only when `open` is explicitly configured as active.
+- Pull requests MUST NOT be dispatched or included in issue cleanup.
+- Issue IDs MUST be stable across restarts and distinguish the configured
+  instance, repository, and issue number. Identifiers SHOULD include the
+  owner, repository, and issue number for readable logs and workspace names.
+- `branch_name` SHOULD derive from the issue number and slugified title.
+- `blocked_by` is empty unless the adapter implements a documented native
+  dependency mapping; references in issue text MUST NOT invent blockers.
+- Endpoint, repository, credentials, state mapping, priority mapping, and
+  assignee changes MAY require a restart. Implementations MUST document
+  that limitation; polling and concurrency reload retain their existing contract.
 
 #### 5.3.2 `polling` (object)
 
@@ -1721,7 +1768,7 @@ Session identifiers:
 - Synthesize `thread_id` as a UUID generated at session start.
 - `turn_id` is the per-turn 1-based counter.
 
-## 11. Issue Tracker Integration Contract (Linear-Compatible)
+## 11. Issue Tracker Integration Contract
 
 ### 11.1 REQUIRED Operations
 
@@ -1757,6 +1804,29 @@ Important:
 
 A non-Linear implementation MAY change transport details, but the normalized outputs MUST match the
 domain model in Section 4.
+
+### 11.2.C Query Semantics (Forgejo)
+
+- List repository issues with `GET /repos/{owner}/{repo}/issues`, using
+  `state=all` and `type=issues`, then normalize and filter locally.
+  State-label matching uses OR semantics, rather than an API label filter
+  that might require all configured labels.
+- Follow pagination using `page` and `limit` until the complete result is
+  available. Respect the instance's response limits and `Link` pagination;
+  never treat a failed or malformed later page as a successful partial fetch.
+- Use `GET /repos/{owner}/{repo}/issues/{number}` for reconciliation.
+  A missing issue (HTTP 404) MAY be omitted from the refreshed result.
+  Authentication failures, rate limits, and transport failures MUST remain
+  errors rather than appear to be missing issues.
+- Send personal-access tokens in `Authorization: token ...`; never put
+  credentials in query parameters or include them in diagnostic messages.
+- Apply a bounded request timeout (RECOMMENDED 30000 ms). Redirects and
+  pagination MUST NOT forward credentials outside the configured API origin.
+- Return the normalized issue model in §4, with lowercase labels and
+  parsed ISO-8601 timestamps. Preserve issue descriptions without modification.
+- Empty state/ID requests SHOULD return an empty result without an API call.
+- Reuse the error behavior in §11.4 for candidate polling, startup cleanup,
+  and active-worker reconciliation.
 
 ### 11.3 Normalization Rules
 
