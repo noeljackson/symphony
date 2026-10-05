@@ -37,6 +37,7 @@ fn cfg(workspace_root: PathBuf, command: String) -> Arc<ServiceConfig> {
     Arc::new(ServiceConfig {
         tracker: TrackerConfig {
             kind: TrackerKind::Linear,
+            repository: None,
             endpoint: "https://example".into(),
             api_key: Some("k".into()),
             project_slug: Some("demo".into()),

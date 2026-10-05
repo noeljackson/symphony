@@ -46,9 +46,9 @@ Tell your favorite coding agent to build Symphony in a programming language of y
 
 This repository ships the [Rust implementation](rust/README.md), which
 targets SPEC v2 with the Codex and Claude Code backends, an HTTP dashboard,
-and the `linear_graphql` extension. The current [SPEC v3](SPEC.md) also
-describes persistent storage and GitHub tracking; those are not implemented
-in Rust yet.
+and the `linear_graphql` extension. It also implements the [SPEC v3](SPEC.md)
+GitHub Issues and Forgejo Issues tracker contracts. Persistent storage
+remains unimplemented.
 
 ```sh
 cd rust
@@ -56,8 +56,8 @@ cargo build --release --locked
 cargo test --workspace --locked
 ```
 
-Configure a `WORKFLOW.md` with the SPEC v2 Linear tracker fields documented
-in [rust/README.md](rust/README.md), then run `rust/target/release/symphony`
+Configure a `WORKFLOW.md` for Linear, GitHub Issues, or Forgejo Issues as
+documented in [rust/README.md](rust/README.md), then run `rust/target/release/symphony`
 with that workflow's path.
 
 You can also ask your favorite coding agent to help with the setup:

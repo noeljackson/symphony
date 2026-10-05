@@ -17,3 +17,8 @@ async-trait.workspace = true
 reqwest.workspace = true
 symphony-core.workspace = true
 symphony-codex.workspace = true
+base64 = "0.22"
+ring = "0.17"
+
+[dev-dependencies]
+axum.workspace = true

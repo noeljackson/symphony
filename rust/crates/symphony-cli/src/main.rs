@@ -9,16 +9,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use symphony_codex::tools::ToolExecutor;
-use symphony_core::config::TrackerKind;
 use symphony_core::prompt::PromptBuilder;
 use symphony_core::watcher::{ReloadEvent, WorkflowWatcher};
 use symphony_core::workflow::WorkflowLoader;
 use symphony_core::ServiceConfig;
 use symphony_orchestrator::{Orchestrator, RealWorker, WorkspaceCleaner, WorkspaceManagerCleaner};
-use symphony_tracker::linear::{GraphqlTransport, LinearClient, LinearConfig, ReqwestTransport};
-use symphony_tracker::linear_tool::LinearGraphqlTool;
-use symphony_tracker::Tracker;
+use symphony_tracker::factory::build_tracker;
 use symphony_workspace::WorkspaceManager;
 
 #[derive(Parser, Debug)]
@@ -167,33 +163,13 @@ async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
     }
     let cfg = Arc::new(cfg);
 
-    let (tracker, graphql_transport): (Arc<dyn Tracker>, Arc<dyn GraphqlTransport>) =
-        match cfg.tracker.kind {
-            TrackerKind::Linear => {
-                let transport: Arc<dyn GraphqlTransport> = Arc::new(ReqwestTransport::new(
-                    cfg.tracker.endpoint.clone(),
-                    cfg.tracker.api_key.clone().unwrap_or_default(),
-                ));
-                let client = match LinearClient::new(LinearConfig {
-                    endpoint: cfg.tracker.endpoint.clone(),
-                    api_key: cfg.tracker.api_key.clone().unwrap_or_default(),
-                    project_slug: cfg.tracker.project_slug.clone().unwrap_or_default(),
-                    active_states: cfg.tracker.active_states.clone(),
-                    terminal_states: cfg.tracker.terminal_states.clone(),
-                }) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("symphony: failed to build Linear client: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                };
-                (Arc::new(client), transport)
-            }
-            TrackerKind::Other(ref k) => {
-                eprintln!("symphony: unsupported tracker kind: {k}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let (tracker, tools) = match build_tracker(&cfg.tracker) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("symphony: failed to build tracker: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let workspace_mgr = Arc::new(WorkspaceManager::new(
         cfg.workspace.root.clone(),
@@ -219,7 +195,6 @@ async fn run(path: PathBuf, port_override: Option<u16>) -> ExitCode {
         tracing::warn!("terminal cleanup fetch failed; continuing startup");
     }
 
-    let tools: Arc<dyn ToolExecutor> = Arc::new(LinearGraphqlTool::new(graphql_transport));
     let runner = Arc::new(
         RealWorker::new(
             cfg.clone(),

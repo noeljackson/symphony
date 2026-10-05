@@ -104,7 +104,7 @@ should land before broader feature work; the rest are pull-as-needed.
 - WebSocket transport for the event stream (SSE is enough for now)
 - Authentication on the dashboard (assumes loopback / private network)
 - Rich workspace editor in the browser (read-only browse only)
-- Pluggable issue tracker adapters beyond Linear (tracked separately in SPEC §18.2's existing TODOs)
+- Additional tracker adapters beyond Linear, GitHub Issues, and Forgejo (see SPEC §18.2)
 
 ## Conventions
 

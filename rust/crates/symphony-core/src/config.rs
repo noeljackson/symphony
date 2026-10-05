@@ -12,6 +12,8 @@ use crate::workflow::WorkflowDefinition;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackerKind {
     Linear,
+    Github,
+    Forgejo,
     Other(String),
 }
 
@@ -19,6 +21,8 @@ impl TrackerKind {
     pub fn parse(raw: &str) -> Self {
         match raw.to_lowercase().as_str() {
             "linear" => Self::Linear,
+            "github" => Self::Github,
+            "forgejo" => Self::Forgejo,
             other => Self::Other(other.to_string()),
         }
     }
@@ -32,6 +36,88 @@ pub struct TrackerConfig {
     pub project_slug: Option<String>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
+    pub repository: Option<RepositoryConfig>,
+}
+
+/// SPEC v3 §5.3.1.B/C repository settings. App fields are used only by GitHub.
+/// Credentials are deliberately excluded from Debug output.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct RepositoryConfig {
+    pub owner: String,
+    pub repo: String,
+    pub api_token: Option<String>,
+    pub app_id: Option<String>,
+    pub app_installation_id: Option<String>,
+    pub private_key: Option<String>,
+    pub label_priority_map: BTreeMap<String, i32>,
+    pub assignee: Option<String>,
+}
+
+impl std::fmt::Debug for RepositoryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepositoryConfig")
+            .field("owner", &self.owner)
+            .field("repo", &self.repo)
+            .field("assignee", &self.assignee)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RepositoryConfig {
+    pub fn validate(&self, kind: &TrackerKind) -> Result<(), ConfigError> {
+        let prefix = if *kind == TrackerKind::Forgejo {
+            "forgejo"
+        } else {
+            "github"
+        };
+        for (field, value) in [("owner", &self.owner), ("repo", &self.repo)] {
+            if value.trim().is_empty()
+                || value.contains(['/', '\\'])
+                || value == "."
+                || value == ".."
+            {
+                return Err(ConfigError::InvalidValue {
+                    field: format!("{prefix}.{field}"),
+                    reason: "expected a nonempty repository path segment".into(),
+                });
+            }
+        }
+        let app = [&self.app_id, &self.app_installation_id, &self.private_key];
+        if *kind == TrackerKind::Github && app.iter().any(|v| v.is_some()) {
+            if app
+                .iter()
+                .any(|v| v.as_deref().unwrap_or("").trim().is_empty())
+            {
+                return Err(ConfigError::InvalidValue {
+                    field: "github".into(),
+                    reason:
+                        "App authentication requires app_id, app_installation_id, and private_key"
+                            .into(),
+                });
+            }
+            if self
+                .app_installation_id
+                .as_deref()
+                .unwrap_or("")
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n > 0)
+                .is_none()
+            {
+                return Err(ConfigError::InvalidValue {
+                    field: "github.app_installation_id".into(),
+                    reason: "expected a positive integer string".into(),
+                });
+            }
+        } else if self.api_token.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(ConfigError::Missing(if *kind == TrackerKind::Forgejo {
+                "forgejo.api_token"
+            } else {
+                "github.api_token"
+            }));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +244,7 @@ impl ServiceConfig {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let tracker = parse_tracker(get_map(&raw, "tracker"))?;
+        let tracker = parse_tracker(&raw)?;
         let polling = parse_polling(get_map(&raw, "polling"))?;
         let workspace = parse_workspace(get_map(&raw, "workspace"), &workflow_dir)?;
         let hooks = parse_hooks(get_map(&raw, "hooks"))?;
@@ -198,6 +284,31 @@ impl ServiceConfig {
                     return Err(ConfigError::MissingTrackerProjectSlug);
                 }
             }
+            TrackerKind::Github | TrackerKind::Forgejo => {
+                if self.tracker.kind == TrackerKind::Forgejo
+                    && self.tracker.endpoint.trim().is_empty()
+                {
+                    return Err(ConfigError::Missing("forgejo.endpoint"));
+                }
+                self.tracker
+                    .repository
+                    .as_ref()
+                    .ok_or(ConfigError::Missing(
+                        if self.tracker.kind == TrackerKind::Forgejo {
+                            "forgejo"
+                        } else {
+                            "github"
+                        },
+                    ))?
+                    .validate(&self.tracker.kind)?;
+                if self.tracker.terminal_states.is_empty() {
+                    return Err(ConfigError::InvalidValue {
+                        field: "tracker.terminal_states".into(),
+                        reason: "Repository trackers require a terminal state for closed issues"
+                            .into(),
+                    });
+                }
+            }
             TrackerKind::Other(kind) => {
                 return Err(ConfigError::UnsupportedTrackerKind(kind.clone()));
             }
@@ -230,21 +341,34 @@ fn get_map<'a>(raw: &'a Mapping, key: &str) -> Option<&'a Mapping> {
     raw.get(Value::from(key)).and_then(|v| v.as_mapping())
 }
 
-fn parse_tracker(map: Option<&Mapping>) -> Result<TrackerConfig, ConfigError> {
-    let m = empty_if_none(map);
+fn parse_tracker(raw: &Mapping) -> Result<TrackerConfig, ConfigError> {
+    let m = empty_if_none(get_map(raw, "tracker"));
     let kind_raw = m
         .get(Value::from("kind"))
         .and_then(|v| v.as_str())
         .unwrap_or("linear");
     let kind = TrackerKind::parse(kind_raw);
 
-    let endpoint = m
+    // Accept existing v2 Linear workflows; a v3 block takes full precedence.
+    let settings = match kind {
+        TrackerKind::Linear => empty_if_none(get_map(raw, "linear").or(Some(&m))),
+        TrackerKind::Github => empty_if_none(get_map(raw, "github")),
+        TrackerKind::Forgejo => empty_if_none(get_map(raw, "forgejo")),
+        TrackerKind::Other(_) => empty_if_none(Some(&m)),
+    };
+    let endpoint = settings
         .get(Value::from("endpoint"))
         .and_then(|v| v.as_str())
-        .unwrap_or("https://api.linear.app/graphql")
+        .unwrap_or(if kind == TrackerKind::Github {
+            "https://api.github.com"
+        } else if kind == TrackerKind::Forgejo {
+            ""
+        } else {
+            "https://api.linear.app/graphql"
+        })
         .to_string();
 
-    let api_key_raw = m
+    let api_key_raw = settings
         .get(Value::from("api_key"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
@@ -254,7 +378,7 @@ fn parse_tracker(map: Option<&Mapping>) -> Result<TrackerConfig, ConfigError> {
         other => other,
     };
 
-    let project_slug = m
+    let project_slug = settings
         .get(Value::from("project_slug"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
@@ -271,6 +395,69 @@ fn parse_tracker(map: Option<&Mapping>) -> Result<TrackerConfig, ConfigError> {
         ]
     });
 
+    let repository = if matches!(kind, TrackerKind::Github | TrackerKind::Forgejo) {
+        let prefix = if kind == TrackerKind::Forgejo {
+            "forgejo"
+        } else {
+            "github"
+        };
+        let secret = |key| optional_string(&settings, key).map(|s| resolve_env(&s));
+        let mut label_priority_map = BTreeMap::new();
+        if let Some(value) = settings.get(Value::from("label_priority_map")) {
+            let map = value
+                .as_mapping()
+                .ok_or_else(|| ConfigError::InvalidValue {
+                    field: format!("{prefix}.label_priority_map"),
+                    reason: "expected a map of labels to integers".into(),
+                })?;
+            for (key, value) in map {
+                let label = key.as_str().ok_or_else(|| ConfigError::InvalidValue {
+                    field: format!("{prefix}.label_priority_map"),
+                    reason: "labels must be strings".into(),
+                })?;
+                let priority = value
+                    .as_i64()
+                    .and_then(|n| i32::try_from(n).ok())
+                    .ok_or_else(|| ConfigError::InvalidValue {
+                        field: format!("{prefix}.label_priority_map"),
+                        reason: "priorities must be 32-bit integers".into(),
+                    })?;
+                if label_priority_map
+                    .insert(label.to_lowercase(), priority)
+                    .is_some()
+                {
+                    return Err(ConfigError::InvalidValue {
+                        field: format!("{prefix}.label_priority_map"),
+                        reason: "duplicate label after case normalization".into(),
+                    });
+                }
+            }
+        }
+        Some(RepositoryConfig {
+            owner: optional_string(&settings, "owner").unwrap_or_default(),
+            repo: optional_string(&settings, "repo").unwrap_or_default(),
+            api_token: secret("api_token"),
+            app_id: if kind == TrackerKind::Github {
+                secret("app_id")
+            } else {
+                None
+            },
+            app_installation_id: if kind == TrackerKind::Github {
+                secret("app_installation_id")
+            } else {
+                None
+            },
+            private_key: if kind == TrackerKind::Github {
+                secret("private_key")
+            } else {
+                None
+            },
+            label_priority_map,
+            assignee: optional_string(&settings, "assignee"),
+        })
+    } else {
+        None
+    };
     Ok(TrackerConfig {
         kind,
         endpoint,
@@ -278,6 +465,7 @@ fn parse_tracker(map: Option<&Mapping>) -> Result<TrackerConfig, ConfigError> {
         project_slug,
         active_states,
         terminal_states,
+        repository,
     })
 }
 
@@ -576,6 +764,90 @@ mod tests {
         assert_eq!(cfg.agent.backend, AgentBackend::Codex);
         assert_eq!(cfg.codex.command, "codex app-server");
         assert_eq!(cfg.hooks.timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn parses_github_v3_and_ignores_unselected_tracker_credentials() {
+        let cfg = config_from("tracker:\n  kind: github\ngithub:\n  owner: acme\n  repo: widgets\n  api_token: test-credential\n  label_priority_map:\n    URGENT: 0\n  assignee: alice\nlinear:\n  api_key: unrelated\n  project_slug: unused");
+        cfg.validate_for_dispatch().unwrap();
+        assert_eq!(cfg.tracker.kind, TrackerKind::Github);
+        assert_eq!(cfg.tracker.endpoint, "https://api.github.com");
+        let github = cfg.tracker.repository.unwrap();
+        assert_eq!(github.owner, "acme");
+        assert_eq!(github.label_priority_map.get("urgent"), Some(&0));
+        assert_eq!(github.assignee.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn v3_linear_block_takes_full_precedence_over_legacy_fields() {
+        let cfg = config_from("tracker:\n  kind: linear\n  api_key: legacy\n  project_slug: old\nlinear:\n  api_key: root-token\n  project_slug: new");
+        cfg.validate_for_dispatch().unwrap();
+        assert_eq!(cfg.tracker.api_key.as_deref(), Some("root-token"));
+        assert_eq!(cfg.tracker.project_slug.as_deref(), Some("new"));
+        let cfg = config_from("tracker:\n  kind: linear\n  api_key: legacy\n  project_slug: old\nlinear:\n  project_slug: new");
+        assert!(matches!(
+            cfg.validate_for_dispatch(),
+            Err(ConfigError::MissingTrackerApiKey)
+        ));
+    }
+
+    #[test]
+    fn github_preflight_rejects_missing_fields_and_partial_app_auth() {
+        for fields in [
+            "repo: widgets\n  api_token: x",
+            "owner: acme\n  api_token: x",
+            "owner: acme\n  repo: widgets",
+            "owner: ../acme\n  repo: widgets\n  api_token: x",
+            "owner: acme\n  repo: widgets\n  api_token: x\n  app_id: '123'",
+            "owner: acme\n  repo: widgets\n  api_token: $SYMPHONY_GITHUB_DELIBERATELY_UNSET",
+        ] {
+            let cfg = config_from(&format!("tracker:\n  kind: github\ngithub:\n  {fields}"));
+            assert!(
+                cfg.validate_for_dispatch().is_err(),
+                "accepted invalid config"
+            );
+        }
+    }
+
+    #[test]
+    fn forgejo_requires_an_instance_and_resolves_its_own_credentials() {
+        std::env::set_var("SYMPHONY_TEST_FORGEJO_TOKEN", "test-forgejo-credential");
+        let cfg = config_from("tracker:\n  kind: forgejo\nforgejo:\n  endpoint: https://forge.example/api/v1\n  owner: acme\n  repo: widgets\n  api_token: $SYMPHONY_TEST_FORGEJO_TOKEN\n  label_priority_map:\n    Urgent: 0\ngithub:\n  app_id: unrelated");
+        cfg.validate_for_dispatch().unwrap();
+        assert_eq!(cfg.tracker.kind, TrackerKind::Forgejo);
+        let repository = cfg.tracker.repository.unwrap();
+        assert_eq!(
+            repository.api_token.as_deref(),
+            Some("test-forgejo-credential")
+        );
+        assert!(repository.app_id.is_none());
+        assert_eq!(repository.label_priority_map.get("urgent"), Some(&0));
+        let missing = config_from(
+            "tracker:\n  kind: forgejo\nforgejo:\n  owner: acme\n  repo: widgets\n  api_token: x",
+        );
+        assert!(matches!(
+            missing.validate_for_dispatch(),
+            Err(ConfigError::Missing("forgejo.endpoint"))
+        ));
+        std::env::remove_var("SYMPHONY_TEST_FORGEJO_TOKEN");
+    }
+
+    #[test]
+    fn resolves_github_credentials_and_redacts_debug_output() {
+        std::env::set_var("SYMPHONY_TEST_GITHUB_TOKEN", "test-credential");
+        std::env::set_var("SYMPHONY_TEST_GITHUB_PRIVATE_KEY", "ephemeral-key-material");
+        let cfg = config_from("tracker:\n  kind: github\ngithub:\n  owner: acme\n  repo: widgets\n  api_token: $SYMPHONY_TEST_GITHUB_TOKEN\n  app_id: '123'\n  app_installation_id: '42'\n  private_key: $SYMPHONY_TEST_GITHUB_PRIVATE_KEY");
+        cfg.validate_for_dispatch().unwrap();
+        let github = cfg.tracker.repository.unwrap();
+        assert_eq!(github.api_token.as_deref(), Some("test-credential"));
+        assert_eq!(
+            github.private_key.as_deref(),
+            Some("ephemeral-key-material")
+        );
+        assert!(!format!("{github:?}").contains("test-credential"));
+        assert!(!format!("{github:?}").contains("ephemeral-key-material"));
+        std::env::remove_var("SYMPHONY_TEST_GITHUB_TOKEN");
+        std::env::remove_var("SYMPHONY_TEST_GITHUB_PRIVATE_KEY");
     }
 
     #[test]
