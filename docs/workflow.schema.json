@@ -9,6 +9,7 @@
     "tracker": { "$ref": "#/$defs/tracker" },
     "linear": { "$ref": "#/$defs/linear" },
     "github": { "$ref": "#/$defs/github" },
+    "forgejo": { "$ref": "#/$defs/forgejo" },
     "polling": { "$ref": "#/$defs/polling" },
     "workspace": { "$ref": "#/$defs/workspace" },
     "hooks": { "$ref": "#/$defs/hooks" },
@@ -26,8 +27,8 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["linear", "github"],
-          "description": "Tracker adapter selector. Per-kind auth/endpoint config lives in the matching top-level block (`linear:` or `github:`). SPEC v3 §5.3.1."
+          "enum": ["linear", "github", "forgejo"],
+          "description": "Tracker adapter selector. Per-kind auth/endpoint config lives in the matching top-level block (`linear:`, `github:`, or `forgejo:`). SPEC v3 §5.3.1."
         },
         "active_states": {
           "type": "array",
@@ -98,6 +99,20 @@
         }
       },
       "required": ["owner", "repo"]
+    },
+    "forgejo": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "SPEC v3 §5.3.1.C. Populated when tracker.kind == \"forgejo\".",
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri", "description": "Full instance API base including /api/v1." },
+        "owner": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "api_token": { "type": "string", "minLength": 1, "description": "Token or $VAR_NAME; canonical variable FORGEJO_TOKEN." },
+        "label_priority_map": { "type": "object", "additionalProperties": { "type": "integer" }, "default": {} },
+        "assignee": { "type": "string" }
+      },
+      "required": ["endpoint", "owner", "repo", "api_token"]
     },
     "polling": {
       "type": "object",

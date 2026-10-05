@@ -169,6 +169,7 @@ mod tests {
         ServiceConfig {
             tracker: TrackerConfig {
                 kind: TrackerKind::Linear,
+                repository: None,
                 endpoint: "https://example".into(),
                 api_key: Some("k".into()),
                 project_slug: Some("demo".into()),

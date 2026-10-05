@@ -10,8 +10,7 @@ use std::time::Duration;
 
 use symphony_core::config::{AgentBackend, ServiceConfig, TrackerKind};
 use symphony_core::workflow::WorkflowLoader;
-use symphony_tracker::linear::{LinearClient, LinearConfig};
-use symphony_tracker::Tracker;
+use symphony_tracker::factory::build_tracker;
 use tokio::process::Command;
 
 /// One row in the doctor's output.
@@ -120,6 +119,8 @@ pub async fn run<W: Write>(workflow_path: &Path, out: &mut W) -> std::io::Result
 fn cfg_tracker_kind(cfg: &ServiceConfig) -> &str {
     match cfg.tracker.kind {
         TrackerKind::Linear => "linear",
+        TrackerKind::Github => "github",
+        TrackerKind::Forgejo => "forgejo",
         TrackerKind::Other(ref k) => k.as_str(),
     }
 }
@@ -295,59 +296,35 @@ fn path_contains(name: &str) -> bool {
 }
 
 async fn check_tracker_reachable(cfg: &ServiceConfig) -> CheckResult {
-    match cfg.tracker.kind {
-        TrackerKind::Linear => {
-            let api_key = cfg.tracker.api_key.clone().unwrap_or_default();
-            let project_slug = cfg.tracker.project_slug.clone().unwrap_or_default();
-            if api_key.is_empty() || project_slug.is_empty() {
-                return CheckResult {
-                    name: "tracker reachable",
-                    ok: false,
-                    detail: "missing tracker.api_key or tracker.project_slug".into(),
-                };
-            }
-            let client = match LinearClient::new(LinearConfig {
-                endpoint: cfg.tracker.endpoint.clone(),
-                api_key,
-                project_slug,
-                active_states: cfg.tracker.active_states.clone(),
-                terminal_states: cfg.tracker.terminal_states.clone(),
-            }) {
-                Ok(c) => c,
-                Err(e) => {
-                    return CheckResult {
-                        name: "tracker reachable",
-                        ok: false,
-                        detail: format!("LinearClient::new failed: {e}"),
-                    };
-                }
-            };
-            // Time-bound the network call so an unreachable Linear endpoint
-            // doesn't hang the doctor.
-            match tokio::time::timeout(Duration::from_secs(10), client.fetch_candidate_issues())
-                .await
-            {
-                Ok(Ok(issues)) => CheckResult {
-                    name: "tracker reachable",
-                    ok: true,
-                    detail: format!("Linear returned {} candidate issue(s)", issues.len()),
-                },
-                Ok(Err(e)) => CheckResult {
-                    name: "tracker reachable",
-                    ok: false,
-                    detail: format!("Linear API error: {e}"),
-                },
-                Err(_) => CheckResult {
-                    name: "tracker reachable",
-                    ok: false,
-                    detail: "tracker request timed out after 10s".into(),
-                },
+    let (tracker, _) = match build_tracker(&cfg.tracker) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return CheckResult {
+                name: "tracker reachable",
+                ok: false,
+                detail: format!("tracker configuration error: {e}"),
             }
         }
-        TrackerKind::Other(ref k) => CheckResult {
+    };
+    match tokio::time::timeout(Duration::from_secs(10), tracker.fetch_candidate_issues()).await {
+        Ok(Ok(issues)) => CheckResult {
+            name: "tracker reachable",
+            ok: true,
+            detail: format!(
+                "{} returned {} candidate issue(s)",
+                cfg_tracker_kind(cfg),
+                issues.len()
+            ),
+        },
+        Ok(Err(e)) => CheckResult {
             name: "tracker reachable",
             ok: false,
-            detail: format!("unsupported tracker.kind `{k}`"),
+            detail: format!("tracker API error: {e}"),
+        },
+        Err(_) => CheckResult {
+            name: "tracker reachable",
+            ok: false,
+            detail: "tracker request timed out after 10s".into(),
         },
     }
 }

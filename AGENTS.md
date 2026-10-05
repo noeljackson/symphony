@@ -6,12 +6,13 @@ file so the same guidance applies regardless of which harness is used.
 
 ## What this repo is
 
-Symphony polls Linear, creates per-issue workspaces, and runs a coding
+Symphony polls Linear, GitHub Issues, or Forgejo Issues, creates per-issue
+workspaces, and runs a coding
 agent backend against each issue. The contract lives in [`SPEC.md`](SPEC.md).
 The only shipped implementation is [`rust/`](rust/), targeting SPEC v2
-with the `codex` and `claude_code` backends. SPEC v3 describes additional
-contracts that Rust does not yet implement, including persistent storage
-and GitHub tracking. Keep that distinction explicit in documentation.
+with the `codex` and `claude_code` backends, plus the SPEC v3 GitHub and
+Forgejo tracker contracts. SPEC v3 persistent storage remains unimplemented.
+Keep that distinction explicit in documentation.
 
 ## Spec-first
 
@@ -88,11 +89,14 @@ Opted-in tests fail clearly when a required credential or binary is missing.
 cd rust
 cargo test -p symphony-codex --test live_codex -- --ignored
 cargo test -p symphony-tracker --test live_linear -- --ignored
+cargo test -p symphony-tracker --test live_repository -- --ignored
 ```
 
 `live_codex_turn_smoke` additionally requires
 `SYMPHONY_E2E_REAL_CODEX_FULL=1`. Linear tests require `LINEAR_API_KEY`;
-candidate fetch also requires `LINEAR_PROJECT_SLUG`.
+candidate fetch also requires `LINEAR_PROJECT_SLUG`. Repository smoke tests
+require the corresponding `GITHUB_*` or `FORGEJO_*` credentials documented
+in [`rust/README.md`](rust/README.md).
 
 ## Dependency maintenance
 

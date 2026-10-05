@@ -85,6 +85,7 @@ fn make_config(max_concurrent: usize) -> Arc<ServiceConfig> {
     Arc::new(ServiceConfig {
         tracker: TrackerConfig {
             kind: TrackerKind::Linear,
+            repository: None,
             endpoint: "https://example".into(),
             api_key: Some("k".into()),
             project_slug: Some("demo".into()),
