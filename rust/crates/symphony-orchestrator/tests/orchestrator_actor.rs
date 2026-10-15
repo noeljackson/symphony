@@ -3,6 +3,7 @@
 //! workspace.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use symphony_orchestrator::{
     Orchestrator, OrchestratorCommand, OrchestratorHandle, WorkerOutcome, WorkerRunner,
 };
 use symphony_tracker::memory::MemoryTracker;
-use symphony_tracker::Tracker;
+use symphony_tracker::{IssueState, Tracker, TrackerError};
 use tokio::sync::{mpsc, Notify};
 use tokio::time::Instant;
 
@@ -175,6 +176,75 @@ async fn wait_for_dispatches(runner: &ScriptedRunner, count: usize) {
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+struct RecoveringTracker {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Tracker for RecoveringTracker {
+    async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(TrackerError::LinearApiStatus(503))
+        } else {
+            Ok(vec![issue("recovered", "MT-RECOVERED", "Todo")])
+        }
+    }
+
+    async fn fetch_issues_by_states(&self, _states: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_issue_states_by_ids(
+        &self,
+        _ids: &[String],
+    ) -> Result<Vec<IssueState>, TrackerError> {
+        Ok(vec![])
+    }
+}
+
+#[tokio::test]
+async fn scheduled_polling_recovers_after_candidate_fetch_failure() {
+    let mut cfg = (*make_config(1)).clone();
+    cfg.polling.interval_ms = 10;
+    let tracker = Arc::new(RecoveringTracker {
+        calls: AtomicUsize::new(0),
+    });
+    let runner = ScriptedRunner::new(vec![]);
+    let _gate = runner.arm_gate();
+    let (actor, handle) = Orchestrator::new(Arc::new(cfg), tracker.clone(), runner.clone());
+    let task = tokio::spawn(actor.with_auto_schedule(true).run());
+    // One explicit tick only: the retry must come from automatic scheduling.
+    handle.tick().await;
+    wait_for_dispatches(&runner, 1).await;
+    assert!(tracker.calls.load(Ordering::SeqCst) >= 2);
+    assert_eq!(runner.dispatched()[0].0, "MT-RECOVERED");
+    handle.shutdown().await;
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn scheduled_polling_recovers_after_invalid_config_is_reloaded() {
+    let mut valid = (*make_config(1)).clone();
+    valid.polling.interval_ms = 10;
+    let mut invalid = valid.clone();
+    invalid.tracker.api_key = None;
+    let tracker = Arc::new(MemoryTracker::with_issues(vec![issue(
+        "valid", "MT-VALID", "Todo",
+    )]));
+    let runner = ScriptedRunner::new(vec![]);
+    let _gate = runner.arm_gate();
+    let (actor, handle) = Orchestrator::new(Arc::new(invalid), tracker, runner.clone());
+    let task = tokio::spawn(actor.with_auto_schedule(true).run());
+    handle.tick().await;
+    // Snapshot is queued after Tick, so the failing tick has finished here.
+    handle.snapshot().await.unwrap();
+    assert!(runner.dispatched().is_empty());
+    handle.reload(Arc::new(valid)).await;
+    wait_for_dispatches(&runner, 1).await;
+    handle.shutdown().await;
+    task.await.unwrap();
 }
 
 #[tokio::test]
