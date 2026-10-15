@@ -370,6 +370,14 @@ impl Orchestrator {
     }
 
     async fn run_tick(&mut self) {
+        self.poll_and_dispatch().await;
+        // Validation and tracker errors skip this tick, but polling must
+        // continue so recovery does not require an operator restart.
+        self.flush_refresh_replies();
+        self.schedule_next_tick();
+    }
+
+    async fn poll_and_dispatch(&mut self) {
         // SPEC §16.2: reconcile -> rollover -> validate preflight -> budget
         // gate -> fetch -> sort -> dispatch.
         self.reconcile().await;
@@ -377,14 +385,11 @@ impl Orchestrator {
 
         if let Err(e) = self.cfg.validate_for_dispatch() {
             tracing::warn!(error = %e, "dispatch preflight failed");
-            self.flush_refresh_replies();
             return;
         }
 
         if self.budget_cap_reached() {
             self.maybe_emit_budget_warnings();
-            self.flush_refresh_replies();
-            self.schedule_next_tick();
             return;
         }
 
@@ -392,7 +397,6 @@ impl Orchestrator {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "candidate fetch failed");
-                self.flush_refresh_replies();
                 return;
             }
         };
@@ -406,8 +410,6 @@ impl Orchestrator {
             }
         }
         self.maybe_emit_budget_warnings();
-        self.flush_refresh_replies();
-        self.schedule_next_tick();
     }
 
     fn schedule_next_tick(&mut self) {
