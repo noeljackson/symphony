@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Symphony · Operations Dashboard</title>
+  <style>/* DASHBOARD_CSS */</style>
+</head>
+<body>
+<main class="app-shell">
+  <div class="dashboard-shell">
+    <header class="hero-card">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">Symphony Observability</p>
+          <h1 class="hero-title">Operations Dashboard</h1>
+          <p class="hero-copy">Current state, retry pressure, token usage, and orchestration health for the active Symphony runtime.</p>
+        </div>
+        <div class="status-stack">
+          <span id="connection" class="status-badge status-badge-offline" role="status">
+            <span class="status-badge-dot" aria-hidden="true"></span><span id="connection-label">Connecting…</span>
+          </span>
+          <p id="snapshot-time" class="snapshot-time">Waiting for snapshot</p>
+        </div>
+      </div>
+    </header>
+
+    <section id="snapshot-error" class="error-card" {{ERROR_HIDDEN}} aria-labelledby="error-title" role="alert">
+      <h2 id="error-title" class="error-title">Snapshot unavailable</h2>
+      <p id="error-message" class="error-copy">The orchestrator is unavailable. The dashboard will retry automatically.</p>
+    </section>
+
+    <noscript><p class="error-card">Enable JavaScript to view runtime state and receive live updates.</p></noscript>
+
+    <section class="metric-grid" aria-label="Runtime metrics">
+      <article class="metric-card">
+        <h2 class="metric-label">Running</h2>
+        <p id="running-count" class="metric-value numeric">—</p>
+        <p class="metric-detail">Active issue sessions in the current runtime.</p>
+      </article>
+      <article class="metric-card">
+        <h2 class="metric-label">Retrying</h2>
+        <p id="retrying-count" class="metric-value numeric">—</p>
+        <p class="metric-detail">Issues waiting for the next retry window.</p>
+      </article>
+      <article class="metric-card">
+        <h2 class="metric-label">Total tokens</h2>
+        <p id="total-tokens" class="metric-value numeric">—</p>
+        <p id="token-detail" class="metric-detail numeric">In — / Out —</p>
+      </article>
+      <article class="metric-card">
+        <h2 class="metric-label">Runtime</h2>
+        <p id="total-runtime" class="metric-value numeric">—</p>
+        <p class="metric-detail">Total agent runtime across completed and active sessions.</p>
+      </article>
+    </section>
+
+    <section class="section-card" aria-labelledby="rate-limits-title">
+      <div class="section-header"><div>
+        <h2 id="rate-limits-title" class="section-title">Rate limits</h2>
+        <p class="section-copy">Latest upstream rate-limit snapshot, when available.</p>
+      </div></div>
+      <pre id="rate-limits" class="code-panel">No rate-limit snapshot available.</pre>
+    </section>
+
+    <section class="section-card" aria-labelledby="sessions-title">
+      <div class="section-header"><div>
+        <h2 id="sessions-title" class="section-title">Running sessions</h2>
+        <p class="section-copy">Active issues, last known agent activity, and token usage.</p>
+      </div></div>
+      <p id="running-empty" class="empty-state">Waiting for runtime state.</p>
+      <div id="running-table" class="table-wrap" tabindex="0" role="region" aria-label="Running sessions" hidden>
+        <table class="data-table data-table-running">
+          <colgroup><col style="width:12rem"><col style="width:8rem"><col style="width:7.5rem"><col style="width:8.5rem"><col><col style="width:10rem"></colgroup>
+          <thead><tr><th scope="col">Issue</th><th scope="col">State</th><th scope="col">Session</th><th scope="col">Runtime / turns</th><th scope="col">Agent update</th><th scope="col">Tokens</th></tr></thead>
+          <tbody id="running-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section-card" aria-labelledby="retries-title">
+      <div class="section-header"><div>
+        <h2 id="retries-title" class="section-title">Retry queue</h2>
+        <p class="section-copy">Issues waiting for the next retry window.</p>
+      </div></div>
+      <p id="retrying-empty" class="empty-state">Waiting for runtime state.</p>
+      <div id="retrying-table" class="table-wrap" tabindex="0" role="region" aria-label="Retry queue" hidden>
+        <table class="data-table">
+          <thead><tr><th scope="col">Issue</th><th scope="col">Attempt</th><th scope="col">Due at</th><th scope="col">Error</th></tr></thead>
+          <tbody id="retrying-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section-card" aria-labelledby="activity-title">
+      <div class="section-header"><div>
+        <h2 id="activity-title" class="section-title">Recent activity</h2>
+        <p class="section-copy">Live agent events from the current connection.</p>
+      </div></div>
+      <p id="events-empty" class="empty-state">No agent events yet.</p>
+      <div id="events" class="activity-feed" role="log" aria-label="Recent agent activity" aria-live="off"></div>
+    </section>
+  </div>
+</main>
+
+<template id="running-row">
+  <tr>
+    <td><div class="issue-stack"><span class="issue-id" data-field="identifier"></span><a class="issue-link" data-field="details">JSON details</a></div></td>
+    <td><span class="state-badge" data-field="state"></span></td>
+    <td><div class="session-stack"><button type="button" class="subtle-button" data-field="copy">Copy ID</button><span class="muted" data-field="no-session">n/a</span></div></td>
+    <td class="numeric" data-field="runtime"></td>
+    <td><div class="detail-stack"><span class="event-text" data-field="message"></span><span class="muted event-meta" data-field="event"></span></div></td>
+    <td><div class="token-stack numeric"><span data-field="tokens"></span><span class="muted" data-field="token-detail"></span></div></td>
+  </tr>
+</template>
+<template id="retrying-row">
+  <tr>
+    <td><div class="issue-stack"><span class="issue-id" data-field="identifier"></span><a class="issue-link" data-field="details">JSON details</a></div></td>
+    <td class="numeric" data-field="attempt"></td><td class="mono" data-field="due"></td><td data-field="error"></td>
+  </tr>
+</template>
+<script id="initial-state" type="application/json">{{INITIAL_STATE}}</script>
+<script>/* DASHBOARD_JS */</script>
+</body>
+</html>

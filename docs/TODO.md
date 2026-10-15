@@ -11,6 +11,11 @@ should land before broader feature work; the rest are pull-as-needed.
 
 ### P0 — operator visibility
 
+- [ ] **Rust dashboard parity with Elixir** — SPEC §13.7.1
+  - Port the responsive layout, metric cards, session details, rate limits, and retry queue
+  - Retain the Rust activity stream and recover snapshots after connection failures
+  - Implementation prepared locally; PR review and merge pending
+
 - [x] **Live event stream (SSE)** — SPEC §13.7.4 (PR #10)
   - `GET /api/v1/events` with `text/event-stream`
   - Initial `event: snapshot` matches `GET /api/v1/state`

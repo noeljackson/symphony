@@ -76,6 +76,20 @@ Save this as `WORKFLOW.md`, set `LINEAR_API_KEY`, and run:
 ./target/release/symphony --port 8080 /path/to/WORKFLOW.md
 ```
 
+## Operations dashboard
+
+When started with `--port`, Rust serves the operations dashboard at `/`.
+It uses the former Elixir dashboard's responsive layout and styling:
+running and retry counts, token totals, live runtime clocks, session ID
+copy controls, agent updates, rate limits when available, and the retry
+queue. Rust's recent activity feed remains available below these panels.
+
+The page receives live updates through the existing SSE stream, refreshes
+snapshots through the REST API, and displays connection and snapshot
+errors while retaining the last successful data. An idle tracker shows
+empty sessions and zero counts. All page assets are embedded in the Rust
+binary, so rebuilding the binary also updates the UI.
+
 ## Dependency maintenance
 
 `vendor/liquid-core` is a checksum-verified copy of Liquid core 0.26.11
