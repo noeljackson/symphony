@@ -362,6 +362,19 @@ async fn dashboard_root_serves_html() {
     assert!(ct.contains("text/html"));
     let body = resp.text().await.unwrap();
     assert!(body.contains("Symphony"));
+    for section in [
+        "Operations Dashboard",
+        "Total tokens",
+        "Rate limits",
+        "Running sessions",
+        "Retry queue",
+        "Recent activity",
+    ] {
+        assert!(body.contains(section), "dashboard missing {section}");
+    }
+    assert!(body.contains("grid-template-columns"));
+    assert!(body.contains("new EventSource('/api/v1/events')"));
+    assert!(!body.contains("{{INITIAL_STATE}}"));
     server.shutdown().await;
 }
 
